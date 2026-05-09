@@ -33,6 +33,7 @@ Many domains present the same shape of problem:
 - **Genome annotation**: "Which genes / exons / regulatory regions cover this base pair?"
 - **Game engine status effects**: "Which buffs / debuffs are on the player at this frame?"
 - **Tax / contract / regulatory effective dates**: "Which clauses apply on `2026-05-09`?"
+- **Streaming-media local cache (HTTP Range)**: "Which byte ranges of this asset are already on disk? For a player request `[a, b]`, which sub-spans can I serve from the local file and which sub-spans must I fetch over the network?" (See §1.3.1.)
 
 The common shape is:
 
@@ -77,6 +78,43 @@ The current implementation converts markups into `TagChar`s, sorts them by `star
   combined with `r[i]` to reopen the residual stack at newline splits.
 
 **Why not just patch ZMediumToMarkdown rather than build a new abstraction?** Because the "position → active-set index" pattern recurs in many downstream problems (see the §1.1 list); extracting it from the markdown renderer as a standalone, spec'd, two-language-portable container is more valuable than an in-place patch.
+
+### 1.3.1 Secondary consumer: AVPlayer non-contiguous byte-range cache (informative)
+
+> This subsection is **informative**. It documents a second, structurally different workload that `Rangeable` cleanly subsumes, and is intended to validate that the v1 API surface generalises beyond the §1.3 markup-render workload it was distilled from.
+
+A common iOS engineering problem is "play-while-cache" for `AVPlayer` / `AVQueuePlayer`: the player issues HTTP/1.1 `Range` requests against a remote audio/video resource (`Range: bytes=lo-hi`), and the app wants to persist the bytes that flow through so a later play of the same asset can be served from disk. The standard implementation route is to give `AVURLAsset` a custom-scheme URL plus an `AVAssetResourceLoaderDelegate`, and intercept the player's range requests there. (See §15 reference [26].)
+
+The hard part is **non-contiguous merging**. The player does not always request the asset linearly:
+
+1. User plays from byte `0`; player gradually requests `[0, …]` and the app caches what arrives, ending at, say, byte `100`.
+2. User seeks to mid-asset; player issues `Range: bytes=200-` and the app caches the new bytes, ending at byte `500`.
+3. The on-disk cache for this asset now contains `[0, 100] ∪ [200, 500]` — two disjoint runs with a `[101, 199]` gap.
+4. User scrubs back and plays `[150, 300]`. The cache layer must answer two questions on the request path, ideally in `O(\log n)`:
+   - **(Q1) read-side stab:** for the request range `[150, 300]`, which **prefix** can be served immediately from disk, and where does the first gap begin?
+   - **(Q2) write-side merge:** when bytes `[101, 199]` finally arrive over the network, the cache index must merge `[0, 100]`, `[101, 199]`, and `[200, 500]` into a single `[0, 500]` run, *automatically*, including the integer-adjacency case `100 / 101`.
+
+Reference [26] explicitly punts on this: it merges only **strictly contiguous** new data into a single in-memory `Data` blob, drops anything else on the floor, and warns that supporting non-contiguous merge "would require a different storage scheme that can identify gaps, plus a query path that splits the request into 'served-from-disk' and 'fetch-from-network' sub-spans — which is very complex." It also flags that holding the whole asset as a single `Data` is OOM-prone for video-sized assets.
+
+`Rangeable<CacheToken>` (with `CacheToken` a singleton like `.cached`) directly answers both questions and decouples the **byte-range index** from the **byte storage**:
+
+- **Storage of bytes:** a sparse file written via `FileHandle.seek + write` at the right byte offset. This eliminates the "whole asset in `Data`" OOM risk independently.
+- **Index of which byte ranges are present:** a single `Rangeable<CacheToken>` instance per asset.
+  - **(Q2)** is solved by `insert(.cached, start: offset, end: offset + data.count - 1)`. §4.3's integer-adjacency rule means `[0, 100]` and `[101, 199]` automatically union; `[200, 500]` joins on the next merge. The user never writes the merge logic.
+  - **(Q1)** is solved by `r[lo].objs.contains(.cached)` (point-stab for the first byte, `O(\log M + r)` per §6.3) plus a single `transitions(over: lo...hi)` to locate the first close event — the cached run's exclusive end (§4.1.1) — or the first open event when `lo` is in a gap. Splitting `[lo, hi]` into a sequence of "from disk" and "from network" sub-spans is a constant-state walk over the events.
+
+Concretely, the rewrite collapses the original cache manager's protocol from "save bytes + try to merge if contiguous" down to two methods:
+
+```
+cachedPrefix(in: lo...hi) -> Data?              // Q1
+saveDownloadedData(_, offset:)                  // Q2
+```
+
+with no manual merge code on either side; `Rangeable.insert` is the merge, and `Rangeable.transitions` plus the point subscript is the query.
+
+**Why this case validates the v1 API.** The §1.3 markup-render workload exercises (W1) build-once-then-query-densely. This AVPlayer workload, by contrast, exercises an **interleaved insert-and-query** pattern: every player request is preceded by an insert from the previous network response, and the lazy boundary index (§5.2) is rebuilt on demand each time. The fact that the same three primitives — `insert`, `subscript[i]`, `transitions(over:)` — handle both workloads with no API surface additions is the empirical evidence that `Rangeable`'s v1 surface is the right factoring of the underlying problem, not an artefact of the markup-render origin story. The (W2) characteristic also shifts: `m_e` for the cache token can grow as the user scrubs around (dozens of disjoint runs is plausible), but `r` (the active-set size at any byte position) stays at most 1 because there is only one element in the container; the `r[i]` cost is dominated by the `O(\log M)` boundary lookup, well within budget for the request-path latency.
+
+**Out-of-scope for v1:** removing a byte range from the cached set (e.g. an LRU eviction step that drops `[300, 500]`) is currently expressible only by rebuilding the `Rangeable` from the surviving runs returned by `getRange(of: .cached)`. §14.1 already schedules first-class removal for v2; the AVPlayer-cache workload is one of its primary motivators.
 
 ### 1.4 Workload characteristics that drove design choices
 
@@ -1768,6 +1806,7 @@ v1 explicitly excludes (§13) `union` / `intersect` / `difference` between two `
 ### Reference consumer
 
 25. **ZMediumToMarkdown** (this org), file `lib/Parsers/MarkupStyleRender.rb` and `lib/Models/Paragraph.rb`. Concrete production source of the "what's active at index i?" workload that motivates this RFC.
+26. **ZhgChgLi (2021).** *AVPlayer 實踐本地 Cache 功能大全* (AVPlayer/AVQueuePlayer with `AVURLAsset` and `AVAssetResourceLoaderDelegate`). Article on `medium.com/zrealm-ios-dev` (post id `6ce488898003`); reference open-source implementation: `github.com/ZhgChgLi/ZPlayerCacher`. The "non-contiguous Data merge" problem the article explicitly defers (`mergeDownloadedDataIfIsContinuted` only handles strictly contiguous tails) is the workload analysed in §1.3.1.
 
 ---
 
