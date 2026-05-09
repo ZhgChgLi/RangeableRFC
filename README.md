@@ -22,8 +22,10 @@ Same-element overlapping or integer-adjacent ranges merge automatically; differe
 |---|---|---|
 | Ruby 3.2+ | [github.com/ZhgChgLi/RubyRangeable](https://github.com/ZhgChgLi/RubyRangeable) — `gem install rangeable` | 29 tests, ~5.5× speedup over brute-force |
 | Swift 5.7+ | [github.com/ZhgChgLi/SwiftRangeable](https://github.com/ZhgChgLi/SwiftRangeable) — SPM, iOS 12+ / macOS 10.14+ | 38 tests, COW value semantics |
+| Python 3.10+ | [github.com/ZhgChgLi/PythonRangeable](https://github.com/ZhgChgLi/PythonRangeable) — `pip install rangeable` | 117 tests, frozen-dataclass value types, PEP 561 typed |
+| TypeScript / JS (Node 18+) | [github.com/ZhgChgLi/JSRangeable](https://github.com/ZhgChgLi/JSRangeable) — `npm i rangeable-js` | 117 tests, dual ESM + CJS, `keyFn`-based equality |
 
-The two implementations cross-verify against a shared 160-op / 86-probe fixture; their outputs are byte-identical.
+All four implementations cross-verify against a shared 160-op / 86-probe fixture; their outputs are byte-identical.
 
 ## Real-world consumer
 

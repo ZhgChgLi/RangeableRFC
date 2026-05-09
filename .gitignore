@@ -36,3 +36,5 @@ xcuserdata/
 # Sibling reference implementations (independent git repos)
 /RubyRangeable/
 /SwiftRangeable/
+/PythonRangeable/
+/JSRangeable/
