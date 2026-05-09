@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+
+# Ruby
+*.gem
+*.rbc
+/.bundle/
+/.config
+/.yardoc/
+/_yardoc/
+/coverage/
+/doc/
+/pkg/
+/rdoc/
+/tmp/
+/vendor/
+Gemfile.lock
+.byebug_history
+
+# Swift / SPM
+.build/
+*.xcodeproj/
+.swiftpm/
+Package.resolved
+DerivedData/
+.netrc
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Sibling reference implementations (independent git repos)
+/RubyRangeable/
+/SwiftRangeable/
