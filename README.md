@@ -25,8 +25,9 @@ Same-element overlapping or integer-adjacent ranges merge automatically; differe
 | Python 3.10+ | [github.com/ZhgChgLi/PythonRangeable](https://github.com/ZhgChgLi/PythonRangeable) — `pip install rangeable` | 117 tests, frozen-dataclass value types, PEP 561 typed |
 | TypeScript / JS (Node 18+) | [github.com/ZhgChgLi/JSRangeable](https://github.com/ZhgChgLi/JSRangeable) — `npm i rangeable-js` | 117 tests, dual ESM + CJS, `keyFn`-based equality |
 | Kotlin / JVM 11+ | [github.com/ZhgChgLi/KotlinRangeable](https://github.com/ZhgChgLi/KotlinRangeable) — `implementation("com.github.ZhgChgLi:KotlinRangeable:v1.0.0")` (JitPack) | 32 tests, Kotlin 2.2, data-class equality |
+| Go 1.22+ | [github.com/ZhgChgLi/GoRangeable](https://github.com/ZhgChgLi/GoRangeable) — `go get github.com/ZhgChgLi/GoRangeable@v1.0.0` | 31 tests, generics over `comparable`, stdlib only |
 
-All five implementations cross-verify against a shared 160-op / 86-probe fixture; their outputs are byte-identical.
+All six implementations cross-verify against a shared 160-op / 86-probe fixture; their outputs are byte-identical.
 
 ## Real-world consumers
 
