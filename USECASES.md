@@ -2,7 +2,7 @@
 
 `Rangeable<Element>` is a generic, integer-coordinate, closed-interval set container described in [`RFC.md`](RFC.md). It pairs hashable elements with their merged disjoint integer ranges and answers three queries efficiently: by-element (`get_range`), by-position (`r[i]`), and by-range (`transitions`). Same-element overlapping or integer-adjacent ranges merge automatically.
 
-This document collects **seven scenarios**: six new ones that extend the high-level list in [RFC §1.1](RFC.md), plus a self-contained Ruby distillation of the [§1.3 ZMediumToMarkdown markup render](RFC.md) reference consumer (so the canonical example also runs end-to-end here). The §1.3.1 AVPlayer non-contiguous byte-range cache is already detailed in the spec and is not repeated here. Each scenario describes the problem, explains why `Rangeable` is the natural fit, and includes a runnable Ruby example using [`RubyRangeable`](https://github.com/ZhgChgLi/RubyRangeable) **v2.0+** (which adds the Removal and Set-Operations APIs introduced in [RFC §6.6 – §6.13](RFC.md)).
+This document collects **eight scenarios**: six new ones that extend the high-level list in [RFC §1.1](RFC.md), plus self-contained Ruby distillations of both detailed reference consumers from the RFC ([§1.3 ZMediumToMarkdown markup render](RFC.md), [§1.3.1 AVPlayer non-contiguous byte-range cache](RFC.md)) so the canonical examples also run end-to-end here. Each scenario describes the problem, explains why `Rangeable` is the natural fit, and includes a runnable Ruby example using [`RubyRangeable`](https://github.com/ZhgChgLi/RubyRangeable) **v2.0+** (which adds the Removal and Set-Operations APIs introduced in [RFC §6.6 – §6.13](RFC.md)).
 
 ```sh
 gem install rangeable    # 2.0.0+
@@ -17,6 +17,7 @@ gem install rangeable    # 2.0.0+
 5. [CIDR / IP Block Tenant Allocation](#5-cidr--ip-block-tenant-allocation) — new (network engineering)
 6. [Syntax Highlighter Multi-Pass Combination](#6-syntax-highlighter-multi-pass-combination) — new (developer tools)
 7. [ZMediumToMarkdown Markdown Render](#7-zmediumtomarkdown-markdown-render-reference-consumer) — distilled from RFC §1.3 (reference consumer)
+8. [AVPlayer Non-Contiguous Byte-Range Cache](#8-avplayer-non-contiguous-byte-range-cache-reference-consumer) — distilled from RFC §1.3.1 (reference consumer)
 
 ---
 
@@ -529,6 +530,90 @@ Rendered: The **quick _brown_ fox** jumps
 ```
 
 The same render loop in production handles ESCAPE markups, link URLs, code spans, and Jekyll HTML escaping — see [`MarkupStyleRender.rb`](https://github.com/ZhgChgLi/ZMediumToMarkdown/blob/main/lib/Parsers/MarkupStyleRender.rb) for the full implementation.
+
+---
+
+## 8. AVPlayer Non-Contiguous Byte-Range Cache (Reference Consumer)
+
+### Problem
+
+iOS apps using `AVPlayer` / `AVQueuePlayer` with `AVURLAsset` + `AVAssetResourceLoaderDelegate` (see [RFC §15 ref [26]](RFC.md), [`ZPlayerCacher`](https://github.com/ZhgChgLi/ZPlayerCacher)) need a "play-while-cache" path that persists each HTTP `Range` response to disk. Two questions on the request path must be answered, ideally in `O(log n)`:
+
+1. **Q1 — Read-side stab**: for the player's request range `[lo, hi]`, which prefix can be served from the local sparse file, and where does the first gap begin? The request must be split into a sequence of "from-disk" and "from-network" sub-spans.
+2. **Q2 — Write-side merge**: when bytes from two different `Range` responses land — and possibly the gap between them later fills in — the cache index must merge the runs, **including integer-adjacent ones** (`[0, 100]` and `[101, 199]` should fuse into `[0, 199]`). Otherwise the cache fragments and the read-side stab gets confused.
+
+The reference Medium article that motivates [RFC §1.3.1](RFC.md) explicitly defers non-contiguous merge as "too complex": it merges only strictly contiguous runs and drops everything else, leaving a real-world iOS workload without a clean abstraction.
+
+### Why Rangeable
+
+A single `Rangeable<CacheToken>` per asset (with `CacheToken` a singleton like `:cached`) cleanly answers both questions and **decouples the byte-range index from the byte storage** (the actual bytes live in a sparse `FileHandle` written via `seek + write`):
+
+- **Q2** = `cache.insert(:cached, start: offset, end: offset + data.bytesize - 1)`. RFC §4.3's integer-adjacency rule means `[0, 100]` and `[101, 199]` automatically union without any manual merge logic.
+- **Q1** = `cache[lo].objs.include?(:cached)` (point-stab for the first byte) plus a single `transitions(over: lo..hi)` to locate the next boundary — splitting the request into "from-disk" and "from-network" sub-spans is then a constant-state walk over the events.
+- **LRU eviction** (v2): `cache.remove(:cached, start:, end:)` excises a range and may split an existing entry — exactly what an eviction policy needs. Pre-v2 this required rebuilding the `Rangeable` from `get_range(:cached)` minus the evicted run; v2 makes it one call.
+
+### Ruby
+
+```ruby
+require 'rangeable'
+
+# Per-asset cache index. The element is a singleton :cached token; ranges are
+# byte offsets already persisted to a sparse file on disk.
+cache = Rangeable.new
+
+# === Q2: writer side ===
+cache.insert(:cached, start: 0,   end: 100)   # linear playback ended at byte 100
+cache.insert(:cached, start: 200, end: 500)   # user seeked, fresh range from 200
+puts "After seek: #{cache.get_range(:cached).inspect}"
+
+# The gap [101, 199] arrives later. RFC §4.3 integer-adjacency unions everything.
+cache.insert(:cached, start: 101, end: 199)
+puts "After gap-fill: #{cache.get_range(:cached).inspect}"
+
+# === Q1: reader side ===
+# Split a player request [lo, hi] into "from disk" and "from network" sub-spans.
+def split_request(cache, lo, hi)
+  segments = []
+  cursor = lo
+  state = cache[lo].objs.include?(:cached) ? :disk : :network
+
+  cache.transitions(over: lo..hi).each do |ev|
+    next if ev.coordinate <= lo
+    next if ev.coordinate > hi
+    segments << { kind: state, lo: cursor, hi: ev.coordinate - 1 }
+    cursor = ev.coordinate
+    state = ev.kind == :open ? :disk : :network
+  end
+  segments << { kind: state, lo: cursor, hi: hi } if cursor <= hi
+  segments
+end
+
+# Build a non-trivial post-seek state (gap between [101, 199]).
+cache2 = Rangeable.new
+cache2.insert(:cached, start: 0,   end: 100)
+cache2.insert(:cached, start: 200, end: 500)
+
+puts "Request [150, 300]: #{split_request(cache2, 150, 300)}"
+puts "Request [50, 150]:  #{split_request(cache2, 50, 150)}"
+puts "Request [300, 600]: #{split_request(cache2, 300, 600)}"
+
+# === LRU eviction (v2-only) ===
+cache2.remove(:cached, start: 300, end: 400)
+puts "After evicting [300, 400]: #{cache2.get_range(:cached).inspect}"
+```
+
+### Expected output
+
+```text
+After seek: [[0, 100], [200, 500]]
+After gap-fill: [[0, 500]]
+Request [150, 300]: [{:kind=>:network, :lo=>150, :hi=>199}, {:kind=>:disk, :lo=>200, :hi=>300}]
+Request [50, 150]:  [{:kind=>:disk, :lo=>50, :hi=>100}, {:kind=>:network, :lo=>101, :hi=>150}]
+Request [300, 600]: [{:kind=>:disk, :lo=>300, :hi=>500}, {:kind=>:network, :lo=>501, :hi=>600}]
+After evicting [300, 400]: [[0, 100], [200, 299], [401, 500]]
+```
+
+The eviction step shows v2's `remove(e, start, end)` splitting `[200, 500]` into `[200, 299]` and `[401, 500]` — exactly the LRU drop semantics [RFC §1.3.1](RFC.md) explicitly listed as the primary motivator for v2 Removal.
 
 ---
 
