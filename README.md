@@ -17,6 +17,7 @@ Same-element overlapping or integer-adjacent ranges merge automatically; differe
 ## What you'll find here
 
 - **[`RFC.md`](RFC.md)** — the normative specification (~2870 lines, v2.0), reviewed by an independent academic reviewer over four rounds (Round 1 REJECTED → Round 2 v1.0 APPROVED → Round 3 v2.0 spec APPROVED → Round 4 v2.0 implementation APPROVED). Covers API, semantics, data structures, pseudocode, amortised-complexity proofs (Φ-potential), edge cases, an 80-case normative test contract (#1 – #80), and 25+ academic references.
+- **[`USECASES.md`](USECASES.md)** — seven worked Ruby examples (calendar free-time finder, genomic annotation diff, game buff/debuff dispel, tax effective-date composition, CIDR / IP allocation, syntax highlighter, ZMediumToMarkdown render) showing where `Rangeable` is the natural fit.
 
 ## Reference implementations
 
