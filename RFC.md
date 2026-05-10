@@ -1,10 +1,12 @@
 # Rangeable RFC
 
-> **Status:** Draft v1.0
+> **Status:** Draft **RFC v2.0** (supersedes v1.0; v1.0 normative content is preserved verbatim except where explicitly amended for v2)
 > **Editor:** Algorithms Research (graduate-level draft)
-> **Audience:** library implementers in Ruby and Swift, prospective ports to other strongly-typed languages, theoretical reviewers
+> **Audience:** library implementers in Ruby, Swift, Python, Ruby, Kotlin, Go, JavaScript/TypeScript, prospective ports to other strongly-typed languages, theoretical reviewers
 > **Discussion forum:** in-repo issue tracker; this document is the normative reference
 > **Conformance language:** RFC 2119 / BCP 14 (MUST / MUST NOT / SHOULD / SHOULD NOT / MAY)
+>
+> **v2.0 delta (informative summary):** v2 promotes the Removal API (`remove(e, start:, end:)`, `remove(e:)`, `removeAll()/clear()`, `removeRanges(start:, end:)`) and the Set Operations API (`union`, `intersect`, `difference`, `symmetric_difference`) from v1's deferred-future status to **normative**. Eight new method specifications are added in §6.6–§6.13; their normative test contracts are specified in §10.B–§10.G (#21–#80). §4.10 promotes the eager-pruning empty-entry rule to a normative invariant; §5.1 (I1.4) is upgraded from a v1-caveat to an unconditional MUST. §13 and §14.1 / §14.9 are reduced to historical pointers. The v1 API surface (insert, subscript, getRange, transitions, count, isEmpty, copy, each) is **byte-identical** before/after v2 — no v1 caller code or fixture data is broken by the upgrade.
 
 ---
 
@@ -259,16 +261,30 @@ r.copy()      -> Rangeable<Element>  // explicit deep copy (see below)
 
 **Complexity:** `count`/`isEmpty` `O(1)`; iteration `O(E + Σ|R(e)|)`; `copy` `O(M + E)`.
 
-### 3.6 Out-of-scope APIs (not in v1)
+### 3.6 Now-normative APIs (formerly v1 out-of-scope) and remaining out-of-scope APIs
 
-The following operations are v1 **non-goals**; see §13 for details:
+This subsection enumerates the API-surface deltas relative to v1. v2 promotes two clusters of operations from v1's deferred status to normative, and retains the remainder as out-of-scope.
 
-- `remove(e, start:, end:)`, `remove(e:)`, clear-all
-- `union` / `intersect` / `difference` between two `Rangeable`s
-- A persistent / immutable variant of `Rangeable<Element>` (snapshot semantics)
-- Floating-point or non-integer coordinates
-- Multi-dimensional (rectangle stabbing)
-- Range query returning a sequence of `Slot`s (`r[lo...hi].objs`)
+**v2-normative (formerly out-of-scope in v1):**
+
+- `remove(e, start:, end:)` — now normative; see §6.6 (semantics) and §10.B (test contract).
+- `remove(e:)` (a.k.a. `remove_element` / `delete`) — now normative; see §6.7 and §10.B.
+- `removeAll()` / `clear()` — now normative; see §6.8 and §10.B.
+- `removeRanges(start:, end:)` — now normative; see §6.9 and §10.B.
+- `union(other)` — now normative; see §6.10 and §10.C.
+- `intersect(other)` (a.k.a. `intersection`) — now normative; see §6.11 and §10.D.
+- `difference(other)` (a.k.a. `subtracting` / `subtract`) — now normative; see §6.12 and §10.E.
+- `symmetric_difference(other)` — newly added in v2 (was not even sketched in v1's §14.9); see §6.13, §10.F, and the §14.9 amendment for inclusion justification.
+
+Each of the four set operations exists in BOTH a non-mutating "returns a new `Rangeable<Element>`" form AND a mutating "modifies self" form, in languages where both are idiomatic. Per-language naming is the implementer's responsibility (Swift `formUnion`/`union`, Ruby `union!`/`union`, Python `update`/`union`, Kotlin `unionInPlace`/`union`, Go `Union`/`Unioned`, JS `unionInPlace`/`union`); the RFC pins **semantics**, not surface spelling.
+
+**Still out-of-scope in v2 (deferred to v3+):**
+
+- A persistent / immutable variant of `Rangeable<Element>` (snapshot semantics) — see §14.2.
+- Floating-point or non-integer coordinates — see §14.3.
+- Multi-dimensional (rectangle stabbing) — see §14.4.
+- Range query returning a sequence of `Slot`s (`r[lo...hi].objs`).
+- Aggregate-on-overlap variant — see §14.5.
 
 ### 3.7 API ergonomics: aligning the surface to language conventions
 
@@ -457,6 +473,43 @@ The mutation obligations between caller and container are:
 
   > **Consequence:** `[Int.min, Int.max]` is a legal interval (covering the entire machine-integer axis). Its open event has coord `Some(Int.min)` and close event has coord `None`. Every query MUST correctly report this element as active for any `i ∈ [Int.min, Int.max]`.
 
+- (C6) **Host-language integer-precision caveat (informative, v2.0 patch).** Several implementation languages cannot represent the full signed-i64 axis natively:
+
+  > **JavaScript / TypeScript:** `Number` is IEEE-754 double; integer-precise only on `[-(2^53 - 1), 2^53 - 1]` (i.e. `Number.MAX_SAFE_INTEGER == 9007199254740991`). Coordinates beyond this range MAY be silently quantised by `JSON.parse`, arithmetic, or any path that round-trips through `Number`. Implementations MAY choose to (a) accept silent quantisation and document the limit, or (b) require `BigInt` coordinates with an explicit constructor option; this RFC does NOT mandate either choice.
+  >
+  > **Cross-language fixtures (RFC §10.G stress tests, `cross_language.json`):** to ensure byte-identical conformance across all 6 reference languages, fixture authors SHOULD constrain test coordinates to `[-(2^53), 2^53]`. Coordinates outside this range may pass on languages with native i64 (Swift, Ruby, Kotlin, Go, Python) but silently fail equivalence on JS/TS. The `Int.min` and `Int.max` boundary tests (§10 Tests #23, #23.A, #30, #31) remain normative and use language-specific sentinels (`Number.MIN_SAFE_INTEGER` / `Number.MAX_SAFE_INTEGER` in JS, `Int.min` / `Int.max` in others), not the literal i64 bounds.
+  >
+  > **Other host languages:** Ruby `Integer` and Python `int` are arbitrary-precision (no upper bound); Swift `Int`, Kotlin `Int`, and Go `int` are platform-dependent (typically 64-bit signed). All five represent the cross-language fixture i64 range losslessly.
+
+### 4.10 Empty-entry semantics (eager pruning, normative)
+
+> **This subsection is normative and is new in v2.** It governs the post-state of every operation that can shrink `R(e)` — i.e. the four removal methods (§6.6–§6.9), the three set operations that can shrink (§6.11 intersect, §6.12 difference, §6.13 symmetric_difference), and any future op with the same effect.
+
+**(N1) Eager pruning.** When the last interval of `R(e)` is removed by any single operation, the element `e` MUST be excised from **all three** of the container's element-keyed structures atomically with the operation that emptied it:
+
+1. removed from the `intervals` map (i.e. `e ∉ keys(intervals)` after the op);
+2. removed from `insertion_order` (i.e. `e ∉ insertion_order` after the op); and
+3. removed from `ord` (i.e. `ord[e]` is undefined after the op).
+
+After the excision, `ord` MUST be densely renumbered `1..N` over the surviving elements in their existing `insertion_order` position order, so that `ord(e) ∈ [1, count]` continues to hold (§5.1 I1, §4.5).
+
+**(N2) Container-level consistency.** As a direct consequence of (N1), the post-state of any v2 op satisfies the dual of (I2): `keys(intervals) == set(insertion_order) == keys(ord)`, with `|insertion_order| == count == |keys(intervals)|`. There MUST NOT exist an "empty-but-present" element (i.e. `e ∈ insertion_order ∧ R(e) == ∅` is forbidden post-op).
+
+**(N3) Idempotence on a never-present element.** Removing an element that was never inserted, or removing an interval that does not intersect any `R(e)`, MUST be a no-op: no mutation, no version bump, no `event_index` invalidation (§3.2 idempotence dual; cf. §6.6 step 4, §6.7 fast-path, §6.9 atomic-bump rule).
+
+**Rationale (six points):**
+
+1. **§3.2 idempotence symmetry.** Insert is idempotent on a contained interval. The natural inverse — removing a never-inserted element, or removing an empty interval-set — is a no-op. Eager pruning preserves this duality without an asymmetric "ghost element with empty `R(e)`" state. With Option B ("keep empty entry") the inverse is asymmetric: removing the last interval of `e` keeps `e` in `count`, but removing a never-inserted `e'` does not add it; this defeats the natural "insert/remove are inverses" reading.
+2. **§5.1 (I1.4) was already written this way (modulo a v1-deferral caveat).** The original (I1.4) text said "if all intervals of an element are deleted, its key should be removed". v2 simply removes the v1-only parenthetical "but v1 does not provide remove, so in practice…" — see §5.1 below.
+3. **`removeAll(); isEmpty == true` becomes provable.** Without (N1), `removeAll()` would still be required to clear `insertion_order` (since otherwise `count > 0`), creating an asymmetric special case. (N1) collapses this asymmetry by making **every** removal-shrinking op eagerly prune.
+4. **Cross-language Hash semantics.** Ruby `Hash`/Swift `Dictionary`/Python `dict`/Kotlin `LinkedHashMap`/Go `map`/JS `Map` all naturally remove keys on delete. An "empty-but-present" key requires extra bookkeeping in every language and re-introduces the `intervals.size != insertion_order.size` ambiguity that (I2) deliberately rules out.
+5. **Insert-after-remove is well-defined.** If `e` is removed entirely and then re-inserted, the second insert is logically a first-insert (per §4.5: first-insert ordinal is assigned at the first effective insert, and after eager pruning there is no prior effective insert to remember). The element receives a fresh `ord(e)` placed at the tail of `insertion_order`. See deliberate-side-effect note below.
+6. **Set operations get this for free.** For `intersect` (§6.11) and `difference` (§6.12), eager pruning makes `e ∈ keys(result) ⇔ R_result(e) ≠ ∅` automatic; no separate post-op "purge phase" is needed in any implementation.
+
+**Deliberate side effect (documented):** an interleaved sequence `r.insert(e, …); r.remove(e); r.insert(e, …)` yields a fresh `ord(e)` on the second insert; `e` is appended at the tail of `insertion_order`, not restored to its previous position. This is by design: §4.5 anchors `ord` at the **first effective insert**, and after eager pruning the prior appearance is gone (no record survives), so the second `insert(e)` is logically a first-insert. Callers that wish to preserve `ord(e)` across a transient remove MUST avoid the full-remove path (e.g. by retaining one residual interval). See test #14 (Risk R14) and §10.B for cross-language conformance probes.
+
+**Atomicity vs. (I3) lazy index.** Eager pruning is itself a mutation; per §5.2 (I3.c) it MUST invalidate `event_index`. The `version` bump and `event_index := nil` step happen exactly once per atomic op, even when multiple elements are pruned in the same call (e.g. `removeRanges` in §6.9, or `intersect` in §6.11). This avoids `O(E)` redundant index invalidations within a single op.
+
 ---
 
 ## §5  Reference Data Structure
@@ -476,18 +529,23 @@ For any `e ∈ keys(intervals)`:
 1. The elements of `intervals[e]` are arranged in strictly ascending order by `lo`;
 2. Any two adjacent entries `(lo₁, hi₁), (lo₂, hi₂)` satisfy `hi₁ + 1 < lo₂` (neither overlapping nor integer-adjacent);
 3. Each entry satisfies `lo ≤ hi`;
-4. `intervals[e]` is non-empty (if all intervals of an element are deleted, its key should be removed from the map — but v1 does not provide remove, so in practice (I1.4) only requires "never insert an empty entry").
+4. **(v2 normative; was a v1-deferred caveat).** `intervals[e]` MUST be non-empty. Empty entries MUST NOT exist in `intervals`: when the last interval of `R(e)` is removed by any operation, the key `e` MUST be excised from `intervals` (and from `insertion_order` and `ord`) before the operation returns. See §4.10 for the full eager-pruning normative statement and rationale.
 
-**Map key equality** is defined per §4.2; Ruby uses `Hash`, Swift uses `Dictionary`.
+**Map key equality** is defined per §4.2; Ruby uses `Hash`, Swift uses `Dictionary`, Python uses `dict`, Kotlin uses `LinkedHashMap`, Go uses `map`, JavaScript/TypeScript use `Map`.
 
 **Insertion-order tracking:**
 
 ```
-insertion_order : List<Element>     // appended in order of first insert
+insertion_order : List<Element>     // ordered by first effective insert
 // equivalently: Map<Element, Int> recording ord(e)
 ```
 
-Invariant (I2): `insertion_order` is a superset of, or equal to, `keys(intervals)`, and is monotonically append-only (no reordering, no deletion).
+**Invariant (I2) — Element-keyed structure consistency (v2 normative; tightened from v1).**
+
+- (I2.a) `set(insertion_order) == keys(intervals) == keys(ord)`. v1 allowed `insertion_order ⊇ keys(intervals)` because v1 never removed; v2's eager-pruning rule (§4.10) makes equality unconditional.
+- (I2.b) `insertion_order` is **append-only between contiguous runs of insertions**: a run of insertions that does not pass through a remove or set operation MUST NOT reorder existing entries; only first-insert appends a new element to the tail.
+- (I2.c) Operations that excise an element (§6.6 when it empties `R(e)`, §6.7, §6.8, §6.9, §6.11, §6.12, §6.13) MUST excise it from `insertion_order` AND densely renumber `ord` over the survivors `1..N` in surviving-position order.
+- (I2.d) Set operations that introduce new elements (§6.10 union, §6.13 symmetric_difference for the `keys(other) ∖ keys(self)` portion) MUST tail-append those new elements in `other`'s `insertion_order` order, then renumber `ord` densely; see §6.10 / §6.13 and the per-op insertion-order rule table at §4.10's preamble.
 
 ### 5.2 Lazy boundary-event index — invariant + version counter
 
@@ -835,6 +893,462 @@ By the maximal-segment invariant and the linear correctness of the sweep, the re
 
 **Proof.** `event_index.events` is already sorted by §4.5 ordering at build time. bsearch finds the leftmost `coord ≥ lo_q`, and a linear scan terminates at `coord ≤ hi_q + 1`. The returned sub-array preserves the ordering automatically. ∎
 
+### 6.6 `remove(e, start, end)` (v2 normative)
+
+**R(e)-notation semantics:**
+
+> `R(e) := canonicalize(R(e) ∖ [start, end])`. If the result is `∅`, the element MUST be eagerly pruned per §4.10.
+
+**Pseudocode (mirrors §6.1 numbering convention):**
+
+```
+function remove(rangeable r, element e, int start, int end):
+  // 1. Pre-condition (§4.4 D1, mirrors insert)
+  if start > end:
+    raise InvalidIntervalError(start, end)
+
+  // 2. Element-presence fast-path (idempotent no-op, §4.10 N3)
+  per_element_list := r.intervals[e]
+  if per_element_list is None:
+    return            // R(e) is already ∅; version unchanged, event_index unchanged
+
+  // 3. Find the leftmost entry that overlaps [start, end].
+  //    "overlap" := iv.hi >= start (strict overlap; adjacency does NOT subtract).
+  i := bsearch(per_element_list, λ iv → iv.hi >= start)
+
+  // 4. Quick-exit: nothing in R(e) overlaps [start, end] — idempotent no-op.
+  if i == length(per_element_list) or per_element_list[i].lo > end:
+    return            // R(e) unchanged, version unchanged, event_index unchanged
+
+  // 5. Sweep all overlapping entries; produce 0..2 replacement entries per
+  //    consumed entry depending on whether the cut leaves a left-residual,
+  //    a right-residual, both, or neither.
+  to_replace_start := i
+  replacements := []
+  while i < length(per_element_list) and per_element_list[i].lo <= end:
+    iv := per_element_list[i]
+    // Left residual: (iv.lo, start - 1) — only when iv.lo < start (so start - 1 ≥ iv.lo
+    //   ≥ Int.min, no underflow). See "Underflow safety" below.
+    if iv.lo < start:
+      replacements.append( (iv.lo, start - 1) )
+    // Right residual: (end + 1, iv.hi) — only when end < iv.hi (so end + 1 ≤ iv.hi
+    //   ≤ Int.max, no overflow). See "Underflow safety" below.
+    if end < iv.hi:
+      replacements.append( (end + 1, iv.hi) )
+    i += 1
+  to_replace_end := i
+
+  // 6. Splice: replace the consumed range [to_replace_start, to_replace_end)
+  //    with the residual list (length 0..2k where k is consumed-entry count).
+  per_element_list.replace_subrange(to_replace_start, to_replace_end,
+                                    with replacements)
+
+  // 7. Eager pruning (§4.10 N1) when R(e) is now ∅
+  if length(per_element_list) == 0:
+    r.intervals.delete(e)
+    idx := r.insertion_order.index_of(e)
+    r.insertion_order.delete_at(idx)
+    r.ord.delete(e)
+    // Renumber ord densely for elements at positions > idx
+    for f in r.insertion_order[idx ..]:
+      r.ord[f] -= 1
+
+  // 8. Version + index invalidation (§5.2 I3.c)
+  r.version += 1
+  r.event_index := nil
+  return
+```
+
+**Underflow / overflow safety (dual of §6.1 (P5), normative).** `start - 1` in step 5 is computed only when `iv.lo < start`. Since `iv.lo` is a finite Int satisfying `iv.lo < start`, we have `start > iv.lo ≥ Int.min`, hence `start > Int.min` and `start - 1` is a well-defined finite Int. Symmetrically, `end + 1` is computed only when `end < iv.hi`. Since `iv.hi` is a finite Int satisfying `end < iv.hi`, we have `end < iv.hi ≤ Int.max`, hence `end < Int.max` and `end + 1` is a well-defined finite Int. **The professor MUST verify this dual-symmetry argument explicitly: §6.1 (P5) shows insert is `Int.min`-safe via `iv.hi + 1 ≥ lo`; §6.6 here shows remove is both `Int.min`-safe (via `iv.lo < start` guard on `start - 1`) and `Int.max`-safe (via `end < iv.hi` guard on `end + 1`).**
+
+**Invariant maintenance (proof sketch for I1).** Let `L` satisfy (I1) before the op. After step 6, each consumed `iv = (lo_iv, hi_iv)` is replaced by 0, 1, or 2 sub-intervals strictly inside `[lo_iv, hi_iv]`:
+- A left residual `(lo_iv, start - 1)` exists iff `lo_iv < start`; its `hi` is `start - 1 < start`.
+- A right residual `(end + 1, hi_iv)` exists iff `end < hi_iv`; its `lo` is `end + 1 > end`.
+
+**(I1.1) sorted ascending lo.** Within a single consumed entry, the left residual has `hi = start - 1 < end + 1 = lo` of the right residual (gap of `end - start + 1 ≥ 1` integer positions). Across consecutive consumed entries `iv_j` and `iv_{j+1}`: `iv_j.hi + 1 < iv_{j+1}.lo` already held by (I1.2), so `iv_j`'s right residual `(end+1, iv_j.hi)` and `iv_{j+1}`'s left residual `(iv_{j+1}.lo, start-1)` satisfy `iv_j.hi < iv_{j+1}.lo`, hence sorted lo. **(I1.2) no overlap, no adjacency.** Consecutive residuals from the same `iv`: `(start - 1) + 1 = start ≤ end < end + 1 = lo_right`, so the gap between left-residual `hi` and right-residual `lo` is `end - start + 1 + 1 ≥ 2`, satisfying `hi_prev + 1 < lo_next`. Cross-entry residuals: inherit (I1.2) from `L`. **(I1.3) `lo ≤ hi`.** Left residual: `lo_iv ≤ start - 1` (since `lo_iv < start` ⇒ `lo_iv ≤ start - 1`); right residual: `end + 1 ≤ hi_iv` (since `end < hi_iv` ⇒ `end + 1 ≤ hi_iv`). Both hold. **(I1.4) non-empty.** If `length(per_element_list) == 0` after step 6, step 7 excises `e`; otherwise non-empty by construction. ∎
+
+**Idempotence and version-bump rule.** If no entry of `R(e)` overlaps `[start, end]` (steps 2 or 4), the op is a no-op: no mutation, **`version` MUST NOT bump**, `event_index` MUST NOT be invalidated. This is the §6.6 dual of §6.1's containment fast-path (Lemma 6.5.B). Per §4.10 (N3) and the v2 version-bump rule, `version` is bumped exactly once when the `DisjointSet` for `e` actually changed.
+
+**Complexity.** `O(log m_e + k)` for the bsearch + sweep (where `k` is the number of overlapped entries); `O(m_e)` worst case for the splice in a sorted-array implementation; `O(E)` for the eager-prune renumbering when the element is excised. The amortised cost over a workload with rare full-removes is dominated by the mutation cost, not the renumber.
+
+**Test cross-references:** §10.B tests #21–#31 (no overlap, exact match, left-only residual, right-only residual, split, multi-entry sweep, full prune, no-op no-bump, `start > end`, `Int.min`, `Int.max`).
+
+### 6.7 `remove(e)` (v2 normative)
+
+**R(e)-notation semantics:**
+
+> `R(e) := ∅`; `e` is eagerly pruned per §4.10 (N1).
+
+**Pseudocode:**
+
+```
+function remove_element(rangeable r, element e):
+  // 1. Idempotent no-op (§4.10 N3)
+  if e not in r.intervals:
+    return            // version unchanged, event_index unchanged
+
+  // 2. Excise from intervals
+  r.intervals.delete(e)
+
+  // 3. Excise from insertion_order and renumber ord (§4.10 N1)
+  idx := r.insertion_order.index_of(e)
+  r.insertion_order.delete_at(idx)
+  r.ord.delete(e)
+  for f in r.insertion_order[idx ..]:
+    r.ord[f] -= 1
+
+  // 4. Version + index invalidation (§5.2 I3.c)
+  r.version += 1
+  r.event_index := nil
+  return
+```
+
+**Invariant maintenance.** `intervals` and `insertion_order` shrink by exactly one entry; `ord` is densely renumbered. (I1) holds vacuously for the excised element (no longer a key); (I2) holds by step 3; (I3) holds by step 4. ∎
+
+**Idempotence and version-bump rule.** If `e ∉ keys(intervals)` (step 1), the op is a no-op: no mutation, no version bump, no `event_index` invalidation. `version` is bumped exactly once when `e ∈ keys(intervals)`.
+
+**Complexity.** `O(E)` worst case for the linear scan + renumber loop in step 3; `O(1)` for the dictionary delete in step 2. Implementations MAY cache an `idx` map alongside `ord` to drop the linear scan to `O(1)`, but the renumber loop is `O(E)` regardless.
+
+**Test cross-references:** §10.B tests #32 (remove existing element prunes from `count`), #33 (remove non-existent = no-op, no bump), #34 (single-interval element), #35 (many-interval element).
+
+### 6.8 `removeAll() / clear()` (v2 normative)
+
+**R(e)-notation semantics:**
+
+> For all `e`, `R(e) := ∅`. Post-condition matches §3.1's empty-container post-condition.
+
+**Pseudocode:**
+
+```
+function clear(rangeable r):
+  // 1. Idempotent no-op (§4.10 N3)
+  if r.intervals is empty:
+    return            // version unchanged, event_index unchanged
+
+  // 2. Reset all element-keyed structures atomically
+  r.intervals := empty_map()
+  r.insertion_order := empty_list()
+  r.ord := empty_map()
+
+  // 3. Version + index invalidation (§5.2 I3.c)
+  r.version += 1
+  r.event_index := nil
+  return
+```
+
+**Invariant maintenance.** All three element-keyed structures are simultaneously emptied; (I1)/(I2) hold vacuously (no keys); (I3) holds by step 3. ∎
+
+**Idempotence and version-bump rule.** Clearing an empty container MUST NOT bump version. `version` is bumped exactly once when `count > 0` before the call.
+
+**Complexity.** `O(1)` for releasing references; the underlying GC is responsible for the actual entry-by-entry freeing (which is amortised across the program lifetime, not charged to this op). For implementations that explicitly free per-entry (e.g. C++-style RAII), the cost is `O(E + M)`.
+
+**Test cross-references:** §10.B tests #36 (clear non-empty), #37 (clear empty = no-op, no bump), #38 (post-clear `isEmpty == true`), #39 (post-clear `count == 0`), #40 (insert after clear assigns `ord = 1`).
+
+### 6.9 `removeRanges(start, end)` (v2 normative)
+
+**R(e)-notation semantics:**
+
+> For every `e ∈ keys(self)`, `R(e) := canonicalize(R(e) ∖ [start, end])`. Elements with empty result are eagerly pruned per §4.10. **Atomicity:** a single `version` bump for the entire op; eager pruning happens for every element that becomes empty in this single op.
+
+**Pseudocode:**
+
+```
+function remove_ranges(rangeable r, int start, int end):
+  // 1. Pre-condition (D1)
+  if start > end:
+    raise InvalidIntervalError(start, end)
+
+  any_change := false
+
+  // 2. Snapshot the keys so we can mutate intervals while iterating.
+  for e in copy(r.insertion_order):
+    per_element_list := r.intervals[e]
+    // Inline the §6.6 sweep+splice; SUPPRESS per-element version bump
+    // and DEFER the eager-prune insertion_order rebuild until step 4.
+    (changed, became_empty) := remove_subrange_in_place(per_element_list, start, end)
+    if changed:
+      any_change := true
+      if became_empty:
+        r.intervals.delete(e)
+        // Note: do NOT delete_at(insertion_order, …) here — that would be O(E²).
+
+  // 3. If nothing changed, no-op (idempotent §4.10 N3)
+  if not any_change:
+    return            // version unchanged, event_index unchanged
+
+  // 4. Single-pass rebuild of insertion_order + ord (avoids O(E²))
+  r.insertion_order := [e for e in r.insertion_order if e in r.intervals]
+  r.ord := { r.insertion_order[i]: i + 1 for i in 0 .. length(r.insertion_order) - 1 }
+
+  // 5. Single atomic version bump + index invalidation (§5.2 I3.c)
+  r.version += 1
+  r.event_index := nil
+  return
+```
+
+**Atomicity (normative).** The entire op either changes nothing (no version bump, no invalidation) or produces a coherent post-state with **exactly one** version increment. The pre-condition check in step 1 happens before any mutation; step 1 raising `InvalidIntervalError` MUST leave the container completely unchanged. Internal sweep failures (e.g. allocator OOM mid-loop) are out-of-scope of this RFC; implementations SHOULD use a copy-then-swap pattern to maintain atomicity under such failures (analogous to §6.10's "in-place via copy-then-swap" rule).
+
+**Underflow / overflow safety.** Inherited from §6.6 step 5 (per-element sweep is identical to §6.6's).
+
+**Invariant maintenance.** Each per-element sweep preserves (I1) per the §6.6 proof. Step 4 rebuilds `insertion_order` and `ord` densely from the surviving keys, restoring (I2). Step 5 invalidates the index, restoring (I3.c). ∎
+
+**Idempotence and version-bump rule.** No-op if no element's `R(e)` overlaps `[start, end]` (i.e. all per-element sweeps return `changed = false`). `version` MUST be bumped exactly once when `any_change` is true; not once per element.
+
+**Complexity.** `O((Σ_e log m_e) + Σ_e k_e + E)` where `k_e` is the entries consumed for element `e`. The single-pass `insertion_order` rebuild in step 4 is `O(E)` (vs. `O(E²)` if naively done with `delete_at` per element). `event_index` invalidation is `O(1)`.
+
+**Test cross-references:** §10.B tests #41 (broad range hits multiple elements), #42 (no overlap = no-op, no bump), #43 (range fully covers some elements, prunes them, leaves others; single bump verified).
+
+### 6.10 `union(other)` (v2 normative)
+
+**R(e)-notation semantics:**
+
+> For all `e ∈ keys(self) ∪ keys(other)`, `R_result(e) := canonicalize(R_self(e) ∪ R_other(e))`. **Insertion-order rule:** preserve `self`'s `insertion_order`; for elements `e ∈ keys(other) ∖ keys(self)`, append in `other`'s `insertion_order` order at the tail.
+
+**Pseudocode:**
+
+```
+function union(rangeable r_self, rangeable r_other):
+  r_out := Rangeable.empty()
+
+  // 1. Walk self's insertion_order: every key in self appears, possibly extended by other.
+  for e in r_self.insertion_order:
+    list_self  := r_self.intervals[e]
+    list_other := r_other.intervals[e]   // may be None
+    merged := merge_disjoint_lists(list_self, list_other ?? empty_list)
+    // length(merged) > 0 always (list_self non-empty by I1.4); no prune needed.
+    r_out.intervals[e]      := merged
+    r_out.insertion_order.append(e)
+    r_out.ord[e]            := length(r_out.insertion_order)
+
+  // 2. Tail-append keys in other ∖ self in other's insertion_order order.
+  for e in r_other.insertion_order:
+    if e in r_self.intervals: continue   // already handled in step 1
+    merged := copy(r_other.intervals[e])
+    r_out.intervals[e]      := merged
+    r_out.insertion_order.append(e)
+    r_out.ord[e]            := length(r_out.insertion_order)
+
+  // 3. Fresh container starts at version = 0; event_index lazily built on first query.
+  r_out.version := 0
+  return r_out
+
+function merge_disjoint_lists(L1, L2):
+  // Both inputs are (I1)-canonical. Two-pointer sweep merging by lo, with adjacency-collapse.
+  out := []
+  i, j := 0, 0
+  while i < length(L1) and j < length(L2):
+    if L1[i].lo <= L2[j].lo:
+      append_or_merge(out, L1[i]); i += 1
+    else:
+      append_or_merge(out, L2[j]); j += 1
+  while i < length(L1): append_or_merge(out, L1[i]); i += 1
+  while j < length(L2): append_or_merge(out, L2[j]); j += 1
+  return out
+
+function append_or_merge(out, iv):
+  if length(out) == 0 or out.last.hi + 1 < iv.lo:
+    out.append(iv)
+  else:
+    // Overlap or integer adjacency: extend the last entry's hi.
+    out.last.hi := max(out.last.hi, iv.hi)
+```
+
+**In-place form.** The mutating spelling each language exposes (e.g. Swift `formUnion`, Ruby `union!`, Python `update`) MUST use a copy-then-swap (or assign result into `self`) so the operation is atomic w.r.t. errors; `version` MUST bump **at most once** per call. If `result == self` structurally (i.e. every `e ∈ keys(other)` satisfies `R_other(e) ⊆ R_self(e)` and `keys(other) ⊆ keys(self)`), the mutating form MUST NOT bump version (idempotence dual of §3.2).
+
+**Invariant maintenance.** `merge_disjoint_lists` produces an (I1)-canonical list by construction (sorted by `lo` via two-pointer; adjacency-collapse via `append_or_merge`). `r_out.insertion_order` ⊇ `keys(r_out.intervals)` per (I2.a) since every `intervals` key is added with a matching `insertion_order` append. `ord` is dense by construction (assigned `length(insertion_order)` immediately after each append).
+
+**Idempotence and version-bump rule (normative).** For the non-mutating form, the source `version` MUST be unchanged; the new `Rangeable` starts at `version = 0`. For the mutating form, `version` MUST bump iff the result is structurally `!= self` (any keys added, any `R(e)` enlarged). The structural-equality check MAY be implemented either by post-construction comparison or by tracking a `dirty` flag during the sweep (any `append_or_merge` that produces a different result, or any new key addition, sets `dirty = true`).
+
+**Complexity.** `O(M_self + M_other + E_self + E_other)`. The professor MUST verify that `merge_disjoint_lists` is `O(m_e_self + m_e_other)` per element via the two-pointer sweep — NOT `O(m_e_self · m_e_other)` from a naive nested loop. **This is the load-bearing performance claim of §7.7.**
+
+**Test cross-references:** §10.C tests #44 (disjoint elements), #45 (overlapping intervals), #46 (adjacency-merge), #47 (idempotent subset), #48 (union of two empties), #49 (union with self), #50 (insertion_order tail-append).
+
+### 6.11 `intersect(other)` (v2 normative)
+
+**R(e)-notation semantics:**
+
+> For all `e ∈ keys(self) ∩ keys(other)`, `R_result(e) := canonicalize(R_self(e) ∩ R_other(e))`. Elements with empty result are eagerly pruned per §4.10. **Insertion-order rule:** preserve `self`'s `insertion_order` over surviving keys (i.e. `keys(self) ∩ keys(other)` minus pruned-empty); densely renumber `ord`.
+
+**Pseudocode:**
+
+```
+function intersect(rangeable r_self, rangeable r_other):
+  r_out := Rangeable.empty()
+
+  for e in r_self.insertion_order:
+    if e not in r_other.intervals: continue        // not in keys(other), drop
+    intersected := intersect_disjoint_lists(r_self.intervals[e],
+                                            r_other.intervals[e])
+    if length(intersected) == 0: continue          // eager prune (§4.10)
+    r_out.intervals[e]      := intersected
+    r_out.insertion_order.append(e)
+    r_out.ord[e]            := length(r_out.insertion_order)
+
+  r_out.version := 0
+  return r_out
+
+function intersect_disjoint_lists(L1, L2):
+  // Both inputs (I1)-canonical. Two-pointer sweep of pairwise intersections.
+  out := []
+  i, j := 0, 0
+  while i < length(L1) and j < length(L2):
+    lo := max(L1[i].lo, L2[j].lo)
+    hi := min(L1[i].hi, L2[j].hi)
+    if lo <= hi:
+      out.append( (lo, hi) )
+    if L1[i].hi <= L2[j].hi: i += 1
+    else: j += 1
+  return out
+```
+
+**Lemma 6.11.A (intersect preserves (I1) without adjacency-collapse — professor MUST verify).** Suppose `intersect_disjoint_lists` produces two consecutive output entries `(lo_a, hi_a)` and `(lo_b, hi_b)` from `L1[i_a] ∩ L2[j_a]` and `L1[i_b] ∩ L2[j_b]` for some `i_a ≤ i_b`, `j_a ≤ j_b` (monotone advance of `i` and `j`). At least one of `(i_b, j_b)` strictly exceeds `(i_a, j_a)` (else the loop did not advance). WLOG `i_b > i_a`. Then `lo_b ≥ L1[i_b].lo ≥ L1[i_a].hi + 2 ≥ hi_a + 2` (using (I1.2) on `L1`), so `hi_a + 1 < lo_b`. (I1.2) holds on the output without any explicit adjacency-collapse step. ∎
+
+**Invariant maintenance.** Per Lemma 6.11.A the output is (I1)-canonical for each element. Eager pruning (`continue` on `length == 0`) ensures (I1.4). `insertion_order` and `ord` are densely renumbered by construction (only appended when `intersected` is non-empty).
+
+**Idempotence and version-bump rule.** Non-mutating form: source unchanged, fresh `version = 0`. Mutating form (e.g. `formIntersection`, `intersect!`, `intersection_update`): version bumps iff the result is structurally `!= self` (any keys dropped, any `R(e)` shrunk).
+
+**Complexity.** `O(M_self + M_other)` total via the two-pointer sweep. NOT `O(M_self · M_other)`.
+
+**Test cross-references:** §10.D tests #51 (no shared elements), #52 (shared overlapping), #53 (shared disjoint → element pruned), #54 (intersect with self), #55 (intersect with empty), #56 (multiple sub-intervals), #57 (insertion_order preservation + dense ord).
+
+### 6.12 `difference(other)` (v2 normative)
+
+**R(e)-notation semantics:**
+
+> For all `e ∈ keys(self)`, `R_result(e) := canonicalize(R_self(e) ∖ R_other(e))`. Elements with empty result are eagerly pruned per §4.10. **Insertion-order rule:** preserve `self`'s `insertion_order` over surviving keys; densely renumber `ord`.
+
+**Pseudocode:**
+
+```
+function difference(rangeable r_self, rangeable r_other):
+  r_out := Rangeable.empty()
+
+  for e in r_self.insertion_order:
+    list_self  := r_self.intervals[e]
+    list_other := r_other.intervals[e]   // may be None
+    if list_other is None or length(list_other) == 0:
+      remaining := copy(list_self)
+    else:
+      remaining := subtract_disjoint_lists(list_self, list_other)
+    if length(remaining) == 0: continue   // eager prune (§4.10)
+    r_out.intervals[e]      := remaining
+    r_out.insertion_order.append(e)
+    r_out.ord[e]            := length(r_out.insertion_order)
+
+  r_out.version := 0
+  return r_out
+
+function subtract_disjoint_lists(L_a, L_b):
+  // Both inputs (I1)-canonical. Two-pointer sweep, repeatedly cutting an
+  // "in-flight current" entry from L_a by overlapping L_b entries.
+  out := []
+  i, j := 0, 0
+  current_lo, current_hi := nil, nil
+  while i < length(L_a):
+    if current_lo is nil:
+      current_lo, current_hi := L_a[i].lo, L_a[i].hi
+    // Skip L_b entries strictly before the current entry.
+    while j < length(L_b) and L_b[j].hi < current_lo:
+      j += 1
+    if j == length(L_b) or L_b[j].lo > current_hi:
+      // No more L_b cuts on this current entry; commit and advance i.
+      out.append( (current_lo, current_hi) )
+      i += 1
+      current_lo, current_hi := nil, nil
+      continue
+    // L_b[j] overlaps [current_lo, current_hi]; cut.
+    if L_b[j].lo > current_lo:
+      // Left residual: (current_lo, L_b[j].lo - 1)
+      out.append( (current_lo, L_b[j].lo - 1) )
+    if L_b[j].hi < current_hi:
+      // Right residual remains current; advance j.
+      current_lo := L_b[j].hi + 1
+      j += 1
+    else:
+      // L_b[j] swallows the rest of the current entry; advance i.
+      i += 1
+      current_lo, current_hi := nil, nil
+  return out
+```
+
+**Underflow / overflow safety (dual of §6.1 (P5) and §6.6, normative).** `L_b[j].lo - 1` is computed only when `L_b[j].lo > current_lo`, and `current_lo` is a finite Int, so `L_b[j].lo > Int.min` (hence `L_b[j].lo - 1` is well-defined). `L_b[j].hi + 1` is computed only when `L_b[j].hi < current_hi`, and `current_hi` is a finite Int, so `L_b[j].hi < Int.max` (hence `L_b[j].hi + 1` is well-defined). **The professor MUST verify this dual symmetry.**
+
+**Invariant maintenance.** Every output entry is a sub-interval of some `L_a[i]`, separated from the next output entry by either a hole (L_b cut) or an L_a-internal gap (inherited (I1.2) from `L_a`). Within the same `L_a[i]`, residuals are separated by `L_b[j]`'s body, which has length ≥ 1, so `(L_b[j].lo - 1) + 1 = L_b[j].lo ≤ L_b[j].hi < L_b[j].hi + 1`, satisfying (I1.2). Cross-`L_a[i]` consecutive outputs inherit (I1.2) from `L_a`. (I1.3) holds by the cut conditions.
+
+**Idempotence and version-bump rule.** Non-mutating: fresh `version = 0`. Mutating (e.g. `subtract`, `difference!`, `difference_update`): bump iff the result is structurally `!= self` (any `R(e)` shrunk).
+
+**Complexity.** `O(M_self + M_other)` total via the two-pointer sweep.
+
+**Equivalence to per-element `remove` (informative).** `r.difference(other)` is structurally equivalent to the **per-element** reduction `for e in keys(other): for ((lo, hi) in other.getRange(of: e)) r.remove(e, lo, hi)` (modulo the version-bump count: `difference` bumps once total, `remove`-loop bumps once per call with at least one mutation; but the post-state structure is identical). Test #65 verifies this equivalence as a cross-validation probe.
+
+> **Caveat (informative, normative correction in v2.0 patch).** The equivalence is to `remove(e, lo, hi)` (per-key surgical erase, §6.6), NOT to `removeRanges(lo, hi)` (cross-element erase, §6.9). `removeRanges(lo, hi)` cuts `[lo, hi]` out of every `R(e')`; `difference(other)` cuts only `R_other(e)` out of the matching `R_self(e)`. The two diverge whenever `other` has multiple keys whose intervals would, when flattened and applied via `removeRanges`, cross-pollute keys other than their own. Use the per-key `remove` reduction for correct cross-validation.
+
+**Test cross-references:** §10.E tests #58 (subtract disjoint), #59 (subtract self = empty), #60 (left residuals), #61 (right residuals), #62 (split = both residuals), #63 (multi-`L_a` span), #64 (insertion_order preservation), #65 (difference = removeRanges-loop equivalence).
+
+### 6.13 `symmetric_difference(other)` (v2 normative)
+
+**R(e)-notation semantics:**
+
+> `R_result(e) := canonicalize(R_self(e) △ R_other(e))` for all `e ∈ keys(self) ∪ keys(other)`. Elements with empty result are eagerly pruned per §4.10. **Insertion-order rule:** preserve `self`'s `insertion_order` for `e ∈ keys(self)`; tail-append `e ∈ keys(other) ∖ keys(self)` in `other`'s `insertion_order` order; densely renumber `ord`. **Algebraic identity (also normative):** `R_self(e) △ R_other(e) = (R_self(e) ∖ R_other(e)) ∪ (R_other(e) ∖ R_self(e))` per element.
+
+**Pseudocode:**
+
+```
+function symmetric_difference(rangeable r_self, rangeable r_other):
+  r_out := Rangeable.empty()
+
+  // 1. self-primary keys: for each e ∈ keys(self), compute the per-element
+  //    sym-diff via the (a ∖ b) ∪ (b ∖ a) identity, then merge the two
+  //    one-sided residuals (which CAN be adjacent — see "Why merge required" below).
+  for e in r_self.insertion_order:
+    list_self  := r_self.intervals[e]
+    list_other := r_other.intervals[e] ?? empty_list
+    a := subtract_disjoint_lists(list_self,  list_other)   // self ∖ other
+    b := subtract_disjoint_lists(list_other, list_self)    // other ∖ self
+    sym := merge_disjoint_lists(a, b)                      // adjacency-collapse safe
+    if length(sym) == 0: continue                          // eager prune (§4.10)
+    r_out.intervals[e]      := sym
+    r_out.insertion_order.append(e)
+    r_out.ord[e]            := length(r_out.insertion_order)
+
+  // 2. other-only keys: copy R_other(e) directly (b ∖ a degenerates to b when a is empty).
+  for e in r_other.insertion_order:
+    if e in r_self.intervals: continue       // already handled in step 1
+    sym := copy(r_other.intervals[e])
+    if length(sym) == 0: continue            // unreachable since I1.4, but defensive
+    r_out.intervals[e]      := sym
+    r_out.insertion_order.append(e)
+    r_out.ord[e]            := length(r_out.insertion_order)
+
+  r_out.version := 0
+  return r_out
+```
+
+**Why `merge_disjoint_lists` is required (normative; not a sorted-concat).** A naive reading might assume `a` and `b` are always disjoint AND non-adjacent, so a sorted concat would suffice. But the two one-sided residuals can be **adjacent** (gap of exactly 1 integer position), so the `(I1.2)` invariant requires `merge_disjoint_lists`'s adjacency-collapse step.
+
+**Worked example (the adjacency case).** Take `R_self(e) = [(0, 5)]` and `R_other(e) = [(2, 8), (10, 15)]`:
+- `a = subtract(self, other) = [(0, 1)]` (left residual after subtracting `(2, 8)`; the right residual `(9, 5)` is empty since `5 < 9`).
+- `b = subtract(other, self) = [(6, 8), (10, 15)]` (`(2, 8) ∖ (0, 5) = (6, 8)`; `(10, 15)` is untouched by `(0, 5)`).
+- `a` and `b` are NOT adjacent here: `1 + 1 = 2 < 6`. Sorted concat would happen to be correct. Output `sym = [(0, 1), (6, 8), (10, 15)]`. ✓
+
+**Worked example (the truly adjacent case).** Take `R_self(e) = [(0, 5)]` and `R_other(e) = [(6, 10)]`:
+- `a = [(0, 5)]` (`(0, 5)` is disjoint from `(6, 10)`, no cut).
+- `b = [(6, 10)]` (symmetric).
+- `a.last.hi + 1 = 6 == b.first.lo`. **Adjacent.** Sorted concat would produce `[(0, 5), (6, 10)]` which violates (I1.2); `merge_disjoint_lists` correctly collapses to `[(0, 10)]`. ✓
+- Sanity check: `R_self △ R_other = (R_self ∪ R_other) ∖ (R_self ∩ R_other) = [(0, 10)] ∖ ∅ = [(0, 10)]`. ✓ matches.
+
+**This is why `merge_disjoint_lists` (with its `append_or_merge` adjacency-collapse) is required and a sorted-concat is insufficient.**
+
+**Invariant maintenance.** Each `subtract_disjoint_lists` call produces an (I1)-canonical list (per §6.12). `merge_disjoint_lists` then produces an (I1)-canonical list (per §6.10). Eager pruning ensures (I1.4). `insertion_order` and `ord` are densely renumbered by construction.
+
+**Idempotence and version-bump rule.** Non-mutating: source unchanged, fresh `version = 0`. Mutating (e.g. `formSymmetricDifference`, `symmetric_difference!`, `symmetric_difference_update`): bump iff the result is structurally `!= self`. Note `r.symmetric_difference(r) == empty Rangeable`; the mutating form on `self` MUST clear all keys and bump version once.
+
+**Complexity.** `O(M_self + M_other)` per element-loop iteration, summed to `O(M_self + M_other)` total. Each per-element call invokes two `subtract_disjoint_lists` (each `O(m_e_self + m_e_other)`) plus one `merge_disjoint_lists` (also `O(m_e_self + m_e_other)`), giving per-element `O(m_e_self + m_e_other)`; summed over keys, total is `O(M_self + M_other)`.
+
+**Algebraic cross-validation (normative).** Implementations MAY validate against the dual identity `A △ B = (A ∪ B) ∖ (A ∩ B)`. Both forms MUST produce per-element `R(e)` byte-identical results; they MAY produce different `insertion_order` if the implementer is sloppy, so the canonical `insertion_order` rule (self-primary then tail-append) is the **only** spec-compliant ordering — see §14.9 amendment for justification.
+
+**Test cross-references:** §10.F tests #66 (sym-diff with empty = self), #67 (sym-diff with self = empty), #68 (per-element residuals from both sides), #69 (commutativity modulo insertion_order), #70 (associativity), #71 (insertion_order tail-append).
+
 ---
 
 ## §7  Complexity Analysis
@@ -1097,6 +1611,36 @@ For `insert`, the lower bound is `Ω(\log m_e)` for large `m_e` (comparison-base
 
 **Normative:** implementations MAY heuristically choose (a) or (e) after the build completes; the externally observable API behavior MUST be identical.
 
+### 7.6 Removal complexity (v2 normative)
+
+| Op | Worst-case |
+|---|---|
+| `remove(e, start, end)` (§6.6) | `O(log m_e + k + E)` where `k` is the number of overlapping entries swept and `E` is the cost of the eager-prune `ord` renumber (only when the element is fully excised) |
+| `remove(e)` (§6.7) | `O(E)` for the linear scan + renumber loop |
+| `removeAll() / clear()` (§6.8) | `O(1)` (assigning empty maps; per-entry GC is amortised) |
+| `removeRanges(start, end)` (§6.9) | `O((Σ_e log m_e) + Σ_e k_e + E)` where the `O(E)` term is the single-pass `insertion_order` rebuild (avoids the `O(E²)` naive `delete_at` per element) |
+
+**Eager-prune amortisation argument (informative).** The `O(E)` `ord` renumber cost in `remove(e, start, end)` (when the element is fully excised) is amortised away by the dominant lifecycle: an element that lives through `n` inserts before being fully removed pays `O(n log m_e)` for inserts and `O(E)` once on excision; per-op `O(E / n)` ≤ `O(1)` when `n ≥ E`. For workloads with rare full-removes (the typical case — see §1.4 W1), the `O(E)` renumber is amortised away.
+
+**Bound is normative; implementations MUST NOT exceed.** Implementations MUST NOT use a naive `O(m_e²)` per-element sweep; the bsearch + linear sweep is mandatory. Implementations SHOULD NOT trigger `O(E²)` renumbering by calling `remove(e)` in an `O(E)` loop when `removeRanges` or `clear` would suffice; the §6.9 single-pass rebuild and §6.8 atomic clear are provided exactly to avoid this.
+
+### 7.7 Set-operations complexity (v2 normative)
+
+| Op | Worst-case |
+|---|---|
+| `union(other)` (§6.10) | `O(M_self + M_other + E_self + E_other)` |
+| `intersect(other)` (§6.11) | `O(M_self + M_other)` |
+| `difference(other)` (§6.12) | `O(M_self + M_other)` |
+| `symmetric_difference(other)` (§6.13) | `O(M_self + M_other)` |
+
+**Two-pointer linear-merge MUST be used (normative; not negotiable).** All four set ops are specified to use a two-pointer sweep over `(L_self, L_other)` per element. Implementations MUST NOT use a nested-loop `O(m_e_self · m_e_other)` per-element strategy; that produces a total `O(M_self · M_other)` bound, which on workloads of `M_self = M_other = 10000` is 100× slower than the spec'd `O(M_self + M_other) = O(20000)`. **The professor MUST verify each language's `merge_disjoint_lists`, `intersect_disjoint_lists`, and `subtract_disjoint_lists` implementations are linear in the sum of input sizes.** Phase 3 per-language test suites SHOULD include a benchmark probe: `M_self = M_other = 1000` MUST complete `union` in `< 10 ms` on a typical developer laptop (informative bound; the load-bearing claim is the asymptotic `O(M_self + M_other)`).
+
+**Per-element pairwise dispatch (normative).** All four set ops iterate over `keys(self) ∪ keys(other)` (for `union`, `symmetric_difference`) or `keys(self) ∩ keys(other)` (for `intersect`) or `keys(self)` (for `difference`); per element, only one two-pointer sweep is invoked. The `keys` iteration order MUST match the per-op insertion-order rule (§4.10 / per-op pseudocode in §6.10–§6.13).
+
+**Mutating vs. non-mutating cost.** The non-mutating forms (returning a new `Rangeable`) and the mutating forms (modifying `self` in place) have the **same** asymptotic cost per the table above. The mutating form's atomicity (copy-then-swap pattern, §6.10) adds a constant-factor overhead but does not change the asymptotic class.
+
+**Eager-prune cost amortisation in set ops.** `intersect`, `difference`, and `symmetric_difference` may prune elements (drop those with empty result `R(e)`); the dense `ord` renumber is `O(E_result)` and absorbed into the `O(M_self + M_other)` total since `E_result ≤ E_self + E_other ≤ M_self + M_other` (using (I1.4): each surviving element has `m_e ≥ 1`).
+
 ---
 
 ## §8  Comparison with Alternatives
@@ -1183,6 +1727,20 @@ Both Okasaki's *Functional Data Structures* and Driscoll et al. 1986's path copy
 | 21 | `start == end + 1` in a transitions query | The legal precondition of `transitions(over: lo..hi)` is `lo ≤ hi`; `lo == hi + 1` is treated as `lo > hi` (D1) and MUST raise `InvalidIntervalError` (see case 17, Test #22). |
 | 22 | `Int.min` as `lo` in an insert | (C5): MUST be supported. After `insert(e, Int.min, k)`, for any `i ∈ [Int.min, k]`, `e ∈ r[i].objs` MUST hold. Internal algorithms MUST NOT compute `Int.min − 1` (underflow). |
 | 23 | Full-axis interval `[Int.min, Int.max]` | (C4 + C5): legal. close event coord = `None`; for any finite `i`, `r[i].objs` contains `e`. |
+| 24 | No-op `remove(e, start, end)` (no overlap) | (§4.10 N3, §6.6 step 4): MUST NOT bump `version`; MUST NOT invalidate `event_index`. |
+| 25 | `remove(e)` on never-inserted element | (§4.10 N3, §6.7 step 1): MUST NOT bump `version`; MUST NOT invalidate `event_index`. |
+| 26 | `removeAll() / clear()` on empty container | (§4.10 N3, §6.8 step 1): MUST NOT bump `version`; MUST NOT invalidate `event_index`. |
+| 27 | `removeRanges(start, end)` with no overlap on any element | (§4.10 N3, §6.9 step 3): MUST NOT bump `version`; MUST NOT invalidate `event_index`. Verified by checking `any_change == false`. |
+| 28 | `remove(e, start, end)` triggers eager prune | (§4.10 N1, §6.6 step 7): `e` MUST be excised from `intervals`, `insertion_order`, `ord`; subsequent `count` decreases by 1; subsequent elements' `ord` shift down by 1. |
+| 29 | `difference(other)` fully consumes element | (§4.10 N1, §6.12): if `R_self(e) ⊆ R_other(e)`, then `e ∉ keys(result)`; `count_result < count_self`. |
+| 30 | `intersect(other)` with empty `Rangeable` | (§6.11): result is empty (`count == 0`); both `keys(other) == ∅` ⇒ no key in `keys(self) ∩ keys(other)`. |
+| 31 | `union(empty, empty)` | (§6.10): result is empty (`count == 0`); fresh `version = 0`. |
+| 32 | `union(self, self)` | (§6.10 idempotence dual): mutating form MUST NOT bump `version`; non-mutating form returns a structurally-equal new `Rangeable`. |
+| 33 | `removeRanges` raises mid-element (atomicity) | (§6.9): the precondition check (`start > end`) raises BEFORE any mutation; container state MUST be unchanged on raise. (Mid-loop allocator failures are out-of-scope; copy-then-swap pattern recommended.) |
+| 34 | Symmetric difference: two-side residuals adjacent | (§6.13 worked example): `R_self = [(0, 5)]`, `R_other = [(6, 10)]` ⇒ `a = [(0, 5)]`, `b = [(6, 10)]`, `a.last.hi + 1 == b.first.lo` ⇒ `merge_disjoint_lists` MUST collapse to `[(0, 10)]`. (Sorted concat is INSUFFICIENT.) |
+| 35 | `insert` after full `remove(e)` reassigns `ord` | (§4.10 deliberate side effect, §4.5 first-insert ordinal): `r.insert(e, …); r.remove(e); r.insert(e, …)` ⇒ second insert is a first-insert; `ord(e) == count` (tail of `insertion_order`). |
+| 36 | Set-op `keyFn` mismatch (JS-specific) | Languages where `keyFn` is configurable (JS) MUST raise an error when `self._keyFn !== other._keyFn`; MUST NOT silently coerce. |
+| 37 | `Int.max`-bounded `intMaxSentinel` propagation across set-op | Implementations whose data structure uses an `intMaxSentinel` (Go, JS, optionally Kotlin) MUST propagate the sentinel into result containers from non-mutating set ops; transitions on the result MUST produce identical close-coord behavior at `Int.max`. **Sentinel-conflict resolution (normative, v2.0 patch):** when `self.intMaxSentinel` and `other.intMaxSentinel` are both set, the result container MUST inherit `self.intMaxSentinel` (the **left-wins** rule — set ops are not algebraically commutative on configuration metadata, so the receiver/lhs is canonical). When the two values disagree (`self.intMaxSentinel != other.intMaxSentinel`), implementations SHOULD emit a warning (e.g. log entry, debug-only `assert`) but MUST NOT throw — the operation is well-defined under the left-wins rule, and the only observable downstream consequence is at the `transitions(over: …)` boundary on a coordinate equal to one of the two sentinels. When `other.intMaxSentinel` is set but `self.intMaxSentinel` is unset, the result inherits `nil` / unset (left-wins, no auto-promotion). |
 
 ---
 
@@ -1441,6 +1999,374 @@ m.foo = "changed"  // violates §4.6 (M1) — caller bug
 
 ---
 
+### 10.B  Removal Tests (v2 normative; #21–#43)
+
+> **Note (numbering reset for v2 families):** Tests #21–#28 in §10.A above are renamed `#21A–#28A` in cross-references when ambiguity arises with v2's #21–#80; in this RFC the v1 §10.A tests retain their #21–#28 numbers (covering insert/transitions boundary + idempotency tests) and the v2 tests #21–#80 below cover removal + set ops. Implementations MUST disambiguate by section prefix (`§10.A #21` vs `§10.B #21`) when reporting test results. The cross-language fixture (`cross_language.json` v2) uses fully-qualified test IDs `removal_no_overlap`, `union_disjoint_keys`, etc., to avoid this ambiguity.
+
+#### Test #21 — `remove(e, start, end)` no overlap (no-op, no version bump)
+**Given:** `r.insert(Strong(), 10, 20); v0 := r.version`
+**When:** `r.remove(Strong(), 0, 5); v1 := r.version`
+**Then:** `Strong().getRange(from: r) == [(10, 20)]`; `v0 == v1`; `r.count == 1`.
+**Justification:** §6.6 step 4 quick-exit; §4.10 (N3) idempotence.
+
+#### Test #22 — `remove(e, start, end)` exact match consumes one entry
+**Given:** `r.insert(Strong(), 10, 20)`
+**When:** `r.remove(Strong(), 10, 20)`
+**Then:** `r.count == 0`; `r.isEmpty == true`; `Strong()` is excised from `insertion_order`.
+**Justification:** §6.6 step 5 left-residual NOT created (`iv.lo == start`), right-residual NOT created (`end == iv.hi`); replacements `== []`; step 7 eager-prunes.
+
+#### Test #23 — `remove(e, start, end)` leaves left residual only
+**Given:** `r.insert(Strong(), 0, 10)`
+**When:** `r.remove(Strong(), 5, 100)`
+**Then:** `Strong().getRange(from: r) == [(0, 4)]`.
+**Justification:** §6.6 step 5: `iv.lo (0) < start (5)` ⇒ left residual `(0, 4)`; `end (100) > iv.hi (10)` ⇒ NO right residual.
+
+#### Test #24 — `remove(e, start, end)` leaves right residual only
+**Given:** `r.insert(Strong(), 0, 10)`
+**When:** `r.remove(Strong(), -100, 5)`
+**Then:** `Strong().getRange(from: r) == [(6, 10)]`.
+**Justification:** §6.6 step 5: `iv.lo (0) >= start (-100)` ⇒ NO left residual; `end (5) < iv.hi (10)` ⇒ right residual `(6, 10)`.
+
+#### Test #25 — `remove(e, start, end)` splits one entry into two
+**Given:** `r.insert(Strong(), 0, 10)`
+**When:** `r.remove(Strong(), 3, 6)`
+**Then:** `Strong().getRange(from: r) == [(0, 2), (7, 10)]`.
+**Justification:** §6.6 step 5 produces both residuals: `(0, 2)` and `(7, 10)`; (I1.2) holds with gap `7 - 2 - 1 = 4`.
+
+#### Test #26 — `remove(e, start, end)` spans multiple entries
+**Given:** `r.insert(Strong(), 0, 5); r.insert(Strong(), 10, 15); r.insert(Strong(), 20, 25)`
+**When:** `r.remove(Strong(), 3, 22)`
+**Then:** `Strong().getRange(from: r) == [(0, 2), (23, 25)]`.
+**Justification:** §6.6 step 5 sweep: `(0, 5)` produces left residual `(0, 2)`; `(10, 15)` is fully consumed (no residuals); `(20, 25)` produces right residual `(23, 25)`.
+
+#### Test #27 — `remove(e, start, end)` spans entire `R(e)`, prunes element
+**Given:** `r.insert(Strong(), 0, 5); r.insert(Strong(), 10, 15); r.insert(Italic(), 7, 8); v0 := r.version`
+**When:** `r.remove(Strong(), -100, 100); v1 := r.version`
+**Then:** `r.count == 1`; `keys(r) == [Italic]`; `Italic` has `ord == 1` (renumbered from 2); `v1 == v0 + 1`.
+**Justification:** §6.6 step 5 fully consumes both Strong entries; step 7 eager-prunes Strong; Italic's `ord` shifts from 2 to 1.
+
+#### Test #28 — `remove(e, start, end)` no-op MUST NOT bump version
+**Given:** `r.insert(Strong(), 10, 20); v0 := r.version`
+**When:** `r.remove(Strong(), 30, 40); v1 := r.version`; `r.remove(Italic(), 0, 5); v2 := r.version`
+**Then:** `v0 == v1 == v2`.
+**Justification:** §6.6 step 4 (no overlap) and §6.6 step 2 (`Italic` not in keys) are both no-ops per §4.10 (N3).
+
+#### Test #29 — `remove(e, start, end)` with `start > end` raises
+**Given:** `r.insert(Strong(), 0, 10)`
+**When:** `r.remove(Strong(), 7, 3)`
+**Then:** raises `InvalidIntervalError`; `r` unchanged (`Strong().getRange(from: r) == [(0, 10)]`).
+**Justification:** §6.6 step 1 pre-condition.
+
+#### Test #30 — `remove(e, start, end)` with `start == Int.min` (underflow safe)
+**Given:** `r.insert(Strong(), Int.min, Int.min + 100)`
+**When:** `r.remove(Strong(), Int.min, Int.min + 50)`
+**Then:** `Strong().getRange(from: r) == [(Int.min + 51, Int.min + 100)]`.
+**Justification:** §6.6 step 5 left-residual is NOT created (`iv.lo == Int.min == start`), so `start - 1 = Int.min - 1` is NEVER computed. (Underflow safety dual of §6.1 (P5).)
+
+#### Test #31 — `remove(e, start, end)` with `end == Int.max` (overflow safe)
+**Given:** `r.insert(Strong(), 0, Int.max)`
+**When:** `r.remove(Strong(), 1000, Int.max)`
+**Then:** `Strong().getRange(from: r) == [(0, 999)]`.
+**Justification:** §6.6 step 5 right-residual NOT created (`iv.hi == Int.max == end`), so `end + 1 = Int.max + 1` is NEVER computed.
+
+#### Test #32 — `remove(e)` excises element
+**Given:** `r.insert(Strong(), 0, 5); r.insert(Italic(), 7, 12); r.insert(Code(), 15, 20); v0 := r.version`
+**When:** `r.remove(Italic()); v1 := r.version`
+**Then:** `r.count == 2`; `keys(r) == [Strong, Code]`; `r.ord(Strong) == 1`; `r.ord(Code) == 2` (renumbered from 3); `v1 == v0 + 1`.
+**Justification:** §6.7 step 3: linear scan + renumber.
+
+#### Test #33 — `remove(e)` on never-inserted element MUST NOT bump version
+**Given:** `r.insert(Strong(), 0, 5); v0 := r.version`
+**When:** `r.remove(Italic()); v1 := r.version`
+**Then:** `r.count == 1`; `v0 == v1`.
+**Justification:** §6.7 step 1 + §4.10 (N3).
+
+#### Test #34 — `remove(e)` on element with single interval
+**Given:** `r.insert(Strong(), 5, 10)`
+**When:** `r.remove(Strong())`
+**Then:** `r.isEmpty == true`; `r.count == 0`.
+**Justification:** §6.7 fully excises.
+
+#### Test #35 — `remove(e)` on element with many intervals
+**Given:** `r.insert(Strong(), 0, 5); r.insert(Strong(), 10, 15); r.insert(Strong(), 20, 25)` (three disjoint Strong runs)
+**When:** `r.remove(Strong())`
+**Then:** `r.isEmpty == true`; `Strong().getRange(from: r) == []`.
+**Justification:** §6.7 step 2 deletes the entire `intervals[Strong]` list regardless of size.
+
+#### Test #36 — `removeAll() / clear()` on non-empty container
+**Given:** `r.insert(Strong(), 0, 5); r.insert(Italic(), 7, 12); v0 := r.version`
+**When:** `r.removeAll(); v1 := r.version`
+**Then:** `r.isEmpty == true`; `r.count == 0`; `Strong().getRange(from: r) == []`; `Italic().getRange(from: r) == []`; `v1 == v0 + 1`.
+**Justification:** §6.8 step 2 clears all element-keyed structures.
+
+#### Test #37 — `removeAll() / clear()` on empty container MUST NOT bump version
+**Given:** `r := Rangeable<Strong>(); v0 := r.version`
+**When:** `r.removeAll(); v1 := r.version`
+**Then:** `r.isEmpty == true`; `v0 == v1`.
+**Justification:** §6.8 step 1 idempotence.
+
+#### Test #38 — Post-clear `r.isEmpty == true`
+**Given:** `r.insert(Strong(), 0, 5)`
+**When:** `r.removeAll()`
+**Then:** `r.isEmpty == true`; subsequent `r[3].objs == []`; `r.transitions(over: 0..10) == []`.
+**Justification:** §6.8 + §3.5.1 `isEmpty` contract.
+
+#### Test #39 — Post-clear `r.count == 0`
+**Given:** `r.insert(Strong(), 0, 5); r.insert(Italic(), 7, 12)`
+**When:** `r.removeAll()`
+**Then:** `r.count == 0`; iterating `r.each { |e, ranges| ... }` yields nothing.
+**Justification:** §6.8 + §3.5.1 `count` contract.
+
+#### Test #40 — Insert after `clear` assigns `ord = 1`
+**Given:** `r.insert(Strong(), 0, 5); r.insert(Italic(), 7, 12); r.removeAll()`
+**When:** `r.insert(Code(), 100, 110)`
+**Then:** `r.count == 1`; `r.ord(Code) == 1` (NOT 3, despite Strong / Italic being inserted before clear).
+**Justification:** §6.8 fully resets `insertion_order` and `ord`; the next insert is a first-insert per §4.5.
+
+#### Test #41 — `removeRanges(start, end)` hits multiple elements
+**Given:** `r.insert(Strong(), 0, 10); r.insert(Italic(), 5, 15); r.insert(Code(), 100, 110); v0 := r.version`
+**When:** `r.removeRanges(3, 8); v1 := r.version`
+**Then:** `Strong().getRange(from: r) == [(0, 2), (9, 10)]`; `Italic().getRange(from: r) == [(9, 15)]`; `Code().getRange(from: r) == [(100, 110)]`; `v1 == v0 + 1` (single bump, NOT three).
+**Justification:** §6.9 step 5 single atomic bump.
+
+#### Test #42 — `removeRanges(start, end)` no overlap MUST NOT bump version
+**Given:** `r.insert(Strong(), 0, 10); r.insert(Italic(), 50, 60); v0 := r.version`
+**When:** `r.removeRanges(20, 30); v1 := r.version`
+**Then:** `Strong().getRange(from: r) == [(0, 10)]`; `Italic().getRange(from: r) == [(50, 60)]`; `v0 == v1`.
+**Justification:** §6.9 step 3 `any_change == false` ⇒ no-op per §4.10 (N3).
+
+#### Test #43 — `removeRanges` fully covers some elements (mixed prune + retain)
+**Given:** `r.insert(Strong(), 0, 5); r.insert(Italic(), 10, 20); r.insert(Code(), 25, 30); v0 := r.version`
+**When:** `r.removeRanges(0, 30); v1 := r.version`
+**Then:** `r.isEmpty == true`; `r.count == 0`; `v1 == v0 + 1`.
+**(Variant)** With `removeRanges(8, 22)` instead: `Strong().getRange(from: r) == [(0, 5)]`; `Italic` is fully pruned; `Code().getRange(from: r) == [(25, 30)]`; `r.count == 2`; `r.ord(Strong) == 1`; `r.ord(Code) == 2` (renumbered from 3); single version bump.
+**Justification:** §6.9 step 4 atomic rebuild of `insertion_order` + dense `ord` renumber.
+
+### 10.C  Union Tests (v2 normative; #44–#50)
+
+#### Test #44 — `union` with disjoint elements
+**Given:** `r1 := Rangeable<Markup>(); r1.insert(Strong(), 0, 5)`; `r2 := Rangeable<Markup>(); r2.insert(Italic(), 10, 15)`
+**When:** `r3 := r1.union(r2)`
+**Then:** `r3.count == 2`; `r3.insertion_order == [Strong, Italic]`; `Strong().getRange(from: r3) == [(0, 5)]`; `Italic().getRange(from: r3) == [(10, 15)]`; `r3.version == 0`; `r1.version` and `r2.version` unchanged.
+
+#### Test #45 — `union` with same element, overlapping intervals
+**Given:** `r1.insert(Strong(), 0, 10)`; `r2.insert(Strong(), 5, 15)`
+**When:** `r3 := r1.union(r2)`
+**Then:** `Strong().getRange(from: r3) == [(0, 15)]`; `r3.count == 1`.
+**Justification:** §6.10 `merge_disjoint_lists` collapses overlapping `(0, 10)` and `(5, 15)`.
+
+#### Test #46 — `union` adjacency-merge
+**Given:** `r1.insert(Strong(), 0, 5)`; `r2.insert(Strong(), 6, 10)`
+**When:** `r3 := r1.union(r2)`
+**Then:** `Strong().getRange(from: r3) == [(0, 10)]`.
+**Justification:** §4.3 integer-adjacency rule via `append_or_merge` (§6.10): `5 + 1 == 6`.
+
+#### Test #47 — `union` with idempotent subset (mutating form MUST NOT bump version)
+**Given:** `r1.insert(Strong(), 0, 10); r1.insert(Italic(), 20, 30)`; `r2.insert(Strong(), 3, 7)` (`R_r2(Strong) ⊆ R_r1(Strong)`); `v0 := r1.version`
+**When:** `r1.formUnion(r2)` (or language-specific mutating spelling); `v1 := r1.version`
+**Then:** `Strong().getRange(from: r1) == [(0, 10)]`; `Italic().getRange(from: r1) == [(20, 30)]`; `v0 == v1`.
+**Justification:** §6.10 idempotence dual of §3.2 — when `result` is structurally equal to `self`, no version bump.
+
+#### Test #48 — `union` of two empties = empty
+**Given:** `r1 := Rangeable<Markup>(); r2 := Rangeable<Markup>()`
+**When:** `r3 := r1.union(r2)`
+**Then:** `r3.isEmpty == true`; `r3.count == 0`; `r3.version == 0`.
+
+#### Test #49 — `union` with self
+**Given:** `r1.insert(Strong(), 0, 5); r1.insert(Italic(), 10, 15); v0 := r1.version`
+**When:** `r2 := r1.union(r1)`
+**Then:** `r2` is structurally equal to `r1` (same `insertion_order`, same `intervals`); `r2.version == 0`; `r1.version == v0` (source unchanged for non-mutating).
+**(Mutating variant)** `r1.formUnion(r1)` ⇒ `r1.version == v0` (no bump per §6.10 idempotence dual).
+
+#### Test #50 — `union` insertion-order tail-append
+**Given:** `r1.insert(A, 0, 1); r1.insert(B, 2, 3)`; `r2.insert(C, 4, 5); r2.insert(B, 10, 11); r2.insert(D, 12, 13)`
+**When:** `r3 := r1.union(r2)`
+**Then:** `r3.insertion_order == [A, B, C, D]`; specifically `r3.ord(A) == 1`, `r3.ord(B) == 2`, `r3.ord(C) == 3`, `r3.ord(D) == 4`.
+**Justification:** §6.10 step 1 walks `r1.insertion_order` → `[A, B]`; step 2 walks `r2.insertion_order` → `[C, B, D]` and skips `B` (already in `r1`), appending `C` then `D` in `r2`'s order. **NOT** alphabetical, NOT hash-bucket.
+
+### 10.D  Intersect Tests (v2 normative; #51–#57)
+
+#### Test #51 — `intersect` with no shared elements
+**Given:** `r1.insert(Strong(), 0, 10)`; `r2.insert(Italic(), 5, 15)`
+**When:** `r3 := r1.intersect(r2)`
+**Then:** `r3.isEmpty == true`; `r3.count == 0`.
+**Justification:** §6.11: `keys(r1) ∩ keys(r2) == ∅`.
+
+#### Test #52 — `intersect` with shared elements, overlapping intervals
+**Given:** `r1.insert(Strong(), 0, 10)`; `r2.insert(Strong(), 5, 15)`
+**When:** `r3 := r1.intersect(r2)`
+**Then:** `Strong().getRange(from: r3) == [(5, 10)]`; `r3.count == 1`.
+**Justification:** §6.11 `intersect_disjoint_lists`: `max(0, 5) = 5`, `min(10, 15) = 10`.
+
+#### Test #53 — `intersect` with shared elements, disjoint intervals (element pruned)
+**Given:** `r1.insert(Strong(), 0, 5)`; `r2.insert(Strong(), 100, 200)`
+**When:** `r3 := r1.intersect(r2)`
+**Then:** `r3.isEmpty == true`; `Strong()` is NOT in `keys(r3)`.
+**Justification:** §6.11 eager prune (`length(intersected) == 0` ⇒ `continue`); §4.10 (N1).
+
+#### Test #54 — `intersect` with self
+**Given:** `r1.insert(Strong(), 0, 5); r1.insert(Italic(), 10, 15); v0 := r1.version`
+**When:** `r2 := r1.intersect(r1)`
+**Then:** `r2` is structurally equal to `r1`; `r2.version == 0`; `r1.version == v0`.
+
+#### Test #55 — `intersect` with empty `Rangeable`
+**Given:** `r1.insert(Strong(), 0, 5); r1.insert(Italic(), 10, 15)`; `r2 := Rangeable<Markup>()`
+**When:** `r3 := r1.intersect(r2)`
+**Then:** `r3.isEmpty == true`.
+
+#### Test #56 — `intersect` produces multiple sub-intervals per element
+**Given:** `r1.insert(Strong(), 0, 5); r1.insert(Strong(), 10, 15); r1.insert(Strong(), 20, 25)`; `r2.insert(Strong(), 3, 22)`
+**When:** `r3 := r1.intersect(r2)`
+**Then:** `Strong().getRange(from: r3) == [(3, 5), (10, 15), (20, 22)]`.
+**Justification:** §6.11 `intersect_disjoint_lists` two-pointer sweep produces three sub-intervals: `(3, 5)`, `(10, 15)`, `(20, 22)`.
+
+#### Test #57 — `intersect` insertion-order preservation + dense `ord` renumber
+**Given:** `r1.insert(A, 0, 5); r1.insert(B, 10, 15); r1.insert(C, 20, 25); r1.insert(D, 30, 35)`; `r2.insert(A, 0, 5); r2.insert(C, 21, 24); r2.insert(E, 100, 200)`
+**When:** `r3 := r1.intersect(r2)`
+**Then:** `r3.insertion_order == [A, C]` (B and D dropped from `keys(r1) ∖ keys(r2)`; E dropped from `keys(r2) ∖ keys(r1)`); `r3.ord(A) == 1`; `r3.ord(C) == 2` (densely renumbered, NOT 3 from `r1`'s original `ord(C) == 3`); `Strong().getRange(from: r3)` for `A == [(0, 5)]`, `C == [(21, 24)]`.
+
+### 10.E  Difference Tests (v2 normative; #58–#65)
+
+#### Test #58 — `difference` with disjoint elements (returns self structurally)
+**Given:** `r1.insert(Strong(), 0, 10)`; `r2.insert(Italic(), 5, 15)`
+**When:** `r3 := r1.difference(r2)`
+**Then:** `r3` is structurally equal to `r1` (Strong intact; `Italic` is not in `keys(r1)` so untouched); `r3.version == 0`.
+
+#### Test #59 — `difference` with self = empty
+**Given:** `r1.insert(Strong(), 0, 10); r1.insert(Italic(), 20, 30)`
+**When:** `r2 := r1.difference(r1)`
+**Then:** `r2.isEmpty == true`; `r2.count == 0`.
+
+#### Test #60 — `difference` creates left residuals
+**Given:** `r1.insert(Strong(), 0, 10)`; `r2.insert(Strong(), 5, 100)`
+**When:** `r3 := r1.difference(r2)`
+**Then:** `Strong().getRange(from: r3) == [(0, 4)]`.
+
+#### Test #61 — `difference` creates right residuals
+**Given:** `r1.insert(Strong(), 0, 10)`; `r2.insert(Strong(), -100, 5)`
+**When:** `r3 := r1.difference(r2)`
+**Then:** `Strong().getRange(from: r3) == [(6, 10)]`.
+
+#### Test #62 — `difference` creates both residuals (split)
+**Given:** `r1.insert(Strong(), 0, 10)`; `r2.insert(Strong(), 3, 6)`
+**When:** `r3 := r1.difference(r2)`
+**Then:** `Strong().getRange(from: r3) == [(0, 2), (7, 10)]`.
+
+#### Test #63 — `difference` spans multiple `L_a` entries
+**Given:** `r1.insert(Strong(), 0, 5); r1.insert(Strong(), 10, 15); r1.insert(Strong(), 20, 25)`; `r2.insert(Strong(), 3, 22)`
+**When:** `r3 := r1.difference(r2)`
+**Then:** `Strong().getRange(from: r3) == [(0, 2), (23, 25)]`.
+**Justification:** §6.12 `subtract_disjoint_lists`: `(0, 5)` cut by `(3, 22)` ⇒ `(0, 2)`; `(10, 15)` fully consumed; `(20, 25)` cut ⇒ `(23, 25)`.
+
+#### Test #64 — `difference` insertion-order preservation
+**Given:** `r1.insert(A, 0, 5); r1.insert(B, 10, 15); r1.insert(C, 20, 25); r1.insert(D, 30, 35)`; `r2.insert(B, 9, 16); r2.insert(E, 100, 200)`
+**When:** `r3 := r1.difference(r2)`
+**Then:** `r3.insertion_order == [A, C, D]` (B fully consumed and pruned; E ignored since not in `keys(r1)`); `r3.ord(A) == 1`, `r3.ord(C) == 2`, `r3.ord(D) == 3`.
+
+#### Test #65 — `difference` ≡ per-element `remove`-loop equivalence (cross-validation probe)
+**Given:** `r1.insert(Strong(), 0, 10)`; `r2.insert(Strong(), 3, 6)` (single-element scenario; `r2.intervals[Strong] == [(3, 6)]`)
+**When:** `r3 := r1.difference(r2)`; `r4 := r1.copy(); for ((lo, hi) in r2.getRange(of: Strong())) { r4.remove(Strong(), lo, hi) }`
+**Then:** `r3.insertion_order == r4.insertion_order == [Strong]`; `Strong().getRange(from: r3) == Strong().getRange(from: r4) == [(0, 2), (7, 10)]`.
+**Justification:** §6.12 informative equivalence note (per-element form). The equivalence target is `remove(e, lo, hi)` (per-key surgical erase), NOT `removeRanges(lo, hi)` (cross-element erase). The `removeRanges` form is NOT equivalent in multi-element scenarios because `removeRanges(lo, hi)` cuts that range out of EVERY key, while `difference(other)` only uses `R_other(e)` to cut `R_self(e)` for matching `e` (per-key surgical erase). Counter-example: `r1.Italic == [(5, 15)]`, `r2.Strong == [(0, 10)], r2.Italic == [(12, 18)]` — `r1.difference(r2)` gives `Italic == [(5, 11)]` (only cut by `r2.Italic`), but `r4.removeRanges(0, 10); r4.removeRanges(12, 18)` would give `Italic == [(11, 11)]` (also cut by `r2.Strong`'s range). (Note: `r3.version == 0` since fresh; `r4.version == r1.version + 1` since one `remove` bump. Equivalence is on STRUCTURE, not version count.)
+
+### 10.F  Symmetric Difference Tests (v2 normative; #66–#71)
+
+#### Test #66 — `symmetric_difference` with empty = self structurally
+**Given:** `r1.insert(Strong(), 0, 5); r1.insert(Italic(), 10, 15)`; `r2 := Rangeable<Markup>()`
+**When:** `r3 := r1.symmetric_difference(r2)`
+**Then:** `r3.insertion_order == [Strong, Italic]`; `Strong().getRange(from: r3) == [(0, 5)]`; `Italic().getRange(from: r3) == [(10, 15)]`; `r3.version == 0`.
+
+#### Test #67 — `symmetric_difference` with self = empty
+**Given:** `r1.insert(Strong(), 0, 5); r1.insert(Italic(), 10, 15)`
+**When:** `r2 := r1.symmetric_difference(r1)`
+**Then:** `r2.isEmpty == true`; `r2.count == 0`.
+
+#### Test #68 — `symmetric_difference` per-element residuals from both sides
+**Given:** `r1.insert(Strong(), 0, 10)`; `r2.insert(Strong(), 5, 15)`
+**When:** `r3 := r1.symmetric_difference(r2)`
+**Then:** `Strong().getRange(from: r3) == [(0, 4), (11, 15)]`.
+**Justification:** §6.13: `a = subtract(r1, r2) = [(0, 4)]`; `b = subtract(r2, r1) = [(11, 15)]`; `merge_disjoint_lists(a, b) = [(0, 4), (11, 15)]` (non-adjacent).
+
+#### Test #69 — `symmetric_difference` commutativity (modulo insertion_order)
+**Given:** `r1.insert(A, 0, 5); r1.insert(B, 10, 15)`; `r2.insert(B, 12, 17); r2.insert(C, 20, 25)`
+**When:** `r3 := r1.symmetric_difference(r2)`; `r4 := r2.symmetric_difference(r1)`
+**Then:** for every key `e ∈ keys(r3)`: `getRange(of: e, from: r3) == getRange(of: e, from: r4)` (per-element `R(e)` is identical). Specifically: `A == [(0, 5)]`, `B == [(10, 11), (16, 17)]`, `C == [(20, 25)]`. **However:** `r3.insertion_order == [A, B, C]` (self-primary `r1`); `r4.insertion_order == [B, C, A]` (self-primary `r2`). **The `insertion_order` IS NOT commutative; this is by design (§4.10 self-primary rule).**
+
+#### Test #70 — `symmetric_difference` associativity
+**Given:** `r1.insert(A, 0, 10)`; `r2.insert(A, 5, 15)`; `r3.insert(A, 10, 20)`
+**When:** `r_left := r1.symmetric_difference(r2).symmetric_difference(r3)`; `r_right := r1.symmetric_difference(r2.symmetric_difference(r3))`
+**Then:** `getRange(of: A, from: r_left) == getRange(of: A, from: r_right) == [(0, 4), (10, 10), (16, 20)]`. Both `r_left.insertion_order` and `r_right.insertion_order` are `[A]` (single shared key throughout). `r_left.ord(A) == r_right.ord(A) == 1`.
+
+**Worked derivation (left association `(r1 △ r2) △ r3`):**
+- `r1 △ r2`: `a = subtract([(0,10)], [(5,15)]) = [(0, 4)]`; `b = subtract([(5,15)], [(0,10)]) = [(11, 15)]`; `merge(a, b) = [(0, 4), (11, 15)]` (gap `4+1 = 5 < 11`, no collapse). So `R(A) = [(0, 4), (11, 15)]`.
+- `(r1 △ r2) △ r3`: `a = subtract([(0,4), (11,15)], [(10,20)]) = [(0, 4)]` (the `(11,15)` entry is fully consumed by `(10,20)`; the `(0,4)` entry has no overlap with `(10,20)` so it survives intact); `b = subtract([(10,20)], [(0,4), (11,15)]) = [(10, 10), (16, 20)]` (the cut by `(11,15)` leaves left residual `(10, 10)` and right residual `(16, 20)`); `merge(a, b) = [(0, 4), (10, 10), (16, 20)]` (gaps `4+1 = 5 < 10` and `10+1 = 11 < 16`, no collapse).
+
+**Worked derivation (right association `r1 △ (r2 △ r3)`):**
+- `r2 △ r3`: `a = subtract([(5,15)], [(10,20)]) = [(5, 9)]`; `b = subtract([(10,20)], [(5,15)]) = [(16, 20)]`; `merge(a, b) = [(5, 9), (16, 20)]` (gap `9+1 = 10 < 16`, no collapse). So `R(A) = [(5, 9), (16, 20)]`.
+- `r1 △ (r2 △ r3)`: `a = subtract([(0,10)], [(5,9), (16,20)]) = [(0, 4), (10, 10)]` (cut by `(5,9)` produces left residual `(0, 4)` and right residual `(10, 10)`; then `(16, 20)` does not touch `(10, 10)`); `b = subtract([(5,9), (16,20)], [(0,10)]) = [(16, 20)]` (the `(5, 9)` entry is fully consumed by `(0, 10)`; `(16, 20)` survives); `merge(a, b) = [(0, 4), (10, 10), (16, 20)]`.
+
+**Justification (why associativity holds in closed-interval-with-integer-adjacency semantics).** Symmetric difference is XOR on characteristic functions (`χ_{A△B}(x) = χ_A(x) ⊕ χ_B(x)`); XOR is associative, so the underlying integer set `{x | x ∈ R(A) at position x}` is associative regardless of grouping. Canonicalization (the (I1) merge-on-adjacency rewrite for integer coords) is a deterministic function of the integer set, so byte-identical canonical `R(A)` follows from set-equal results. ∎
+
+#### Test #71 — `symmetric_difference` insertion-order tail-append for keys ∈ other ∖ self
+**Given:** `r1.insert(A, 0, 5); r1.insert(B, 10, 15)`; `r2.insert(C, 20, 25); r2.insert(D, 30, 35)`
+**When:** `r3 := r1.symmetric_difference(r2)`
+**Then:** `r3.insertion_order == [A, B, C, D]`; `r3.ord(A) == 1`, `r3.ord(B) == 2`, `r3.ord(C) == 3`, `r3.ord(D) == 4`.
+**Justification:** §6.13 step 1 walks `r1.insertion_order` → `[A, B]` (no overlap with `r2`, so unchanged); step 2 walks `r2.insertion_order` → `[C, D]` (none in `r1`, so tail-appended in `r2`'s order).
+
+### 10.G  Set-op Insertion-order Stress Tests (v2 normative; #72–#80)
+
+> These tests exist specifically to catch subtle bugs where an implementation accidentally relies on `Hash` iteration order (Ruby/Python `dict`) or hash-bucket order (Swift `Dictionary`) instead of the spec-mandated `insertion_order`. They also stress the dense `ord` renumber rule across multiple consecutive set ops.
+
+#### Test #72 — Dense `ord` renumber after multi-element prune
+**Given:** `r1.insert(A, 0, 1); r1.insert(B, 2, 3); r1.insert(C, 4, 5); r1.insert(D, 6, 7); r1.insert(E, 8, 9)`; `r2.insert(B, 100, 200); r2.insert(D, 100, 200)`
+**When:** `r3 := r1.intersect(r2)`
+**Then:** `r3.isEmpty == true` (B's intersect with `(100, 200)` is empty since `R_r1(B) = [(2, 3)]`; same for D); `r3.count == 0`.
+**Justification:** §6.11 eager-prune cascades for both B and D.
+
+#### Test #73 — `union` then `intersect` chain preserves `insertion_order`
+**Given:** `r1.insert(A, 0, 5); r1.insert(B, 10, 15)`; `r2.insert(C, 20, 25); r2.insert(B, 12, 17)`; `r3.insert(B, 0, 100); r3.insert(C, 0, 100)`
+**When:** `r_chain := r1.union(r2).intersect(r3)`
+**Then:** intermediate `r1.union(r2).insertion_order == [A, B, C]`. Then intersect with `r3` (which has only B, C in keys): `r_chain.insertion_order == [B, C]` (A dropped from `keys(r1∪r2) ∩ keys(r3)`); `r_chain.ord(B) == 1`, `r_chain.ord(C) == 2` (densely renumbered).
+
+#### Test #74 — Set-op result `ord` is correct even if input `Rangeable` had pruned elements
+**Given:** `r1.insert(A, 0, 5); r1.insert(B, 10, 15); r1.insert(C, 20, 25); r1.remove(B)` (so `r1.insertion_order == [A, C]`, `r1.ord(C) == 2`)
+**When:** `r2 := r1.union(empty)`
+**Then:** `r2.insertion_order == [A, C]`; `r2.ord(A) == 1`; `r2.ord(C) == 2`.
+**Justification:** §6.10 walks the *current* `r1.insertion_order` (post-prune); the pre-prune `ord(C) == 3` is irrelevant.
+
+#### Test #75 — `difference` then `union` recovers `insertion_order` correctly
+**Given:** `r1.insert(A, 0, 10); r1.insert(B, 20, 30); r1.insert(C, 40, 50)`; `r2.insert(B, 0, 100)` (fully consumes B)
+**When:** `r3 := r1.difference(r2).union(r1)`
+**Then:** `r3.insertion_order == [A, C, B]`. Worked: `r1.difference(r2)` has `keys == [A, C]` (B pruned); union with `r1` re-introduces B at the tail per §6.10 step 2 rule.
+
+#### Test #76 — Union of three with overlapping keys
+**Given:** `r1.insert(A, 0, 5); r1.insert(B, 10, 15)`; `r2.insert(B, 20, 25); r2.insert(C, 30, 35)`; `r3.insert(C, 40, 45); r3.insert(D, 50, 55)`
+**When:** `r_chain := r1.union(r2).union(r3)`
+**Then:** `r_chain.insertion_order == [A, B, C, D]`; specifically `r_chain.ord(A) == 1`, `r_chain.ord(B) == 2`, `r_chain.ord(C) == 3`, `r_chain.ord(D) == 4`. Per-element intervals: `A == [(0, 5)]`; `B == [(10, 15), (20, 25)]`; `C == [(30, 35), (40, 45)]`; `D == [(50, 55)]`.
+
+#### Test #77 — `symmetric_difference` two algebraic-form equivalence
+**Given:** `r1.insert(A, 0, 10); r1.insert(B, 20, 30)`; `r2.insert(A, 5, 15); r2.insert(C, 40, 50)`
+**When:** `r_form1 := r1.symmetric_difference(r2)` (direct `(A∖B) ∪ (B∖A)` form per §6.13); `r_form2 := r1.union(r2).difference(r1.intersect(r2))` (alternate `(A∪B) ∖ (A∩B)` form)
+**Then:** for every key `e ∈ keys(r_form1) ∪ keys(r_form2)`: `getRange(of: e, from: r_form1) == getRange(of: e, from: r_form2)` (per-element identical). **Note:** `insertion_order` MAY differ between the two forms; the canonical (spec-mandated) is `r_form1`'s form. Implementations that internally use form 2 MUST post-normalise to match form 1's `insertion_order` (self-primary then tail-append).
+
+#### Test #78 — Insert-after-remove `ord` reassignment (R14)
+**Given:** `r.insert(A, 0, 5); r.insert(B, 10, 15)` (so `r.ord(A) == 1`, `r.ord(B) == 2`)
+**When:** `r.remove(A)` (so `r.insertion_order == [B]`, `r.ord(B) == 1`); then `r.insert(A, 100, 110)`
+**Then:** `r.insertion_order == [B, A]`; `r.ord(B) == 1`; `r.ord(A) == 2` (NOT 1; A is now a NEW first-insert at the tail).
+**Justification:** §4.10 deliberate side effect.
+
+#### Test #79 — Cross-op `ord` consistency (intersect after union)
+**Given:** `r1.insert(A, 0, 5); r1.insert(B, 10, 15); r1.insert(C, 20, 25)`; `r2.insert(B, 12, 17); r2.insert(D, 30, 35)`
+**When:** `r_union := r1.union(r2)`; `r3.insert(B, 0, 100); r3.insert(D, 0, 100); r3.insert(A, 0, 100)`; `r_intersect := r_union.intersect(r3)`
+**Then:** `r_union.insertion_order == [A, B, C, D]`. `r_intersect.insertion_order == [A, B, D]` (C dropped since not in `keys(r3)`); densely renumbered: `r_intersect.ord(A) == 1`, `r_intersect.ord(B) == 2`, `r_intersect.ord(D) == 3`.
+
+#### Test #80 — Empty result eager prune across set-op chain
+**Given:** `r1.insert(A, 0, 5); r1.insert(B, 10, 15)`; `r2.insert(A, 100, 200); r2.insert(B, 100, 200)` (no overlap with `r1` for either key)
+**When:** `r3 := r1.intersect(r2)`; `r4 := r3.union(r1)`
+**Then:** `r3.isEmpty == true` (both A and B intersect to empty, both pruned). `r4.insertion_order == [A, B]` (recovered from `r1` via union step 2, since `r3` has no keys); `r4.ord(A) == 1`, `r4.ord(B) == 2`.
+
+---
+
 ## §11  Threading / Mutation Guarantees
 
 > v1 pins a **single-writer / multi-reader** model.
@@ -1687,27 +2613,28 @@ public func getRange<E: Hashable>(of e: E, from r: Rangeable<E>) -> [(Int, Int)]
 
 ---
 
-## §13  Non-goals (v1 OUT OF SCOPE)
+## §13  Non-goals (v2 OUT OF SCOPE)
 
-The following are **explicitly excluded** from v1:
+> **v2 update.** Items previously listed here as non-goals — Removal (`remove(e, start:, end:)`, `remove(e:)`, `removeAll() / clear()`, `removeRanges(start:, end:)`) and Set Operations between two `Rangeable`s (`union`, `intersect`, `difference`, `symmetric_difference`) — are **now normative in v2**; see §6.6–§6.13 (algorithms), §10.B–§10.G (test contracts #21–#80), §3.6 (API surface), §4.10 (eager-pruning semantics), §7.6 / §7.7 (complexity bounds). The remaining non-goals are unchanged from v1 and listed below.
 
-1. **Removal:** `remove(e, start:, end:)`, `remove(e:)`, `clear()`. Rationale: remove interacts complexly with the incremental update of the lazy event index; v1 pins the build-once-then-query-densely workload.
-2. **Persistent / Immutable / Snapshot semantics:** no `r.snapshot()` or functional `inserting(...)`. Rationale: see §14.2.
-3. **Set operations (between two `Rangeable`s):** `union(other:)`, `intersect(other:)`, `difference(other:)`. See §14.9 for v2 design considerations.
-4. **Multi-dimensional / rectangle stabbing:** v1 is 1D only.
-5. **Floating-point / continuous coordinates:** the §4.3 adjacency-merge rule does not hold on dense rationals.
-6. **Aggregate value (Boost.ICL `interval_map<K, V>` style):** no `+=` aggregate-on-overlap.
-7. **`r[lo...hi].objs` (range subscript):** not in v1; callers SHOULD assemble the result themselves with `transitions(over:)`.
-8. **Logical-clock semantics (versioning, invalidation history):** v1's `version` is for internal cache invalidation; it is **not** a monotonic logical clock, and callers MUST NOT rely on it for conflict resolution.
+The following are **explicitly excluded** from v2:
+
+1. **Persistent / Immutable / Snapshot semantics:** no `r.snapshot()` or functional `inserting(...)`. Rationale: see §14.2.
+2. **Multi-dimensional / rectangle stabbing:** v2 is 1D only.
+3. **Floating-point / continuous coordinates:** the §4.3 adjacency-merge rule does not hold on dense rationals.
+4. **Aggregate value (Boost.ICL `interval_map<K, V>` style):** no `+=` aggregate-on-overlap.
+5. **`r[lo...hi].objs` (range subscript):** not in v2; callers SHOULD assemble the result themselves with `transitions(over:)`.
+6. **Logical-clock semantics (versioning, invalidation history):** the `version` counter is for internal cache invalidation; it is **not** a monotonic logical clock, and callers MUST NOT rely on it for conflict resolution.
 
 ---
 
 ## §14  Future Work
 
-### 14.1 Removal (v2)
+### 14.1 Removal (historical pointer)
 
-- Support `remove(e, start:, end:)` ⇒ excise a range from `R(e)`; this may split an existing entry.
-- The amortised analysis becomes more complex: if the potential function is still `M`, remove can increase `M` (one entry splits into two), requiring a redesigned potential.
+> **Implemented in v2.** See §6.6 (`remove(e, start, end)`), §6.7 (`remove(e)`), §6.8 (`removeAll() / clear()`), §6.9 (`removeRanges(start, end)`); §4.10 for the eager-pruning rule that anchors all four ops; §7.6 for complexity bounds; §10.B (#21–#43) for the test contract.
+>
+> **Resolution of the v1-noted "potential function" complication.** v1's §7.2 analysis used a monotone potential `Φ := M + …` that depends on the assumption "M never decreases" (insert-only). Remove can decrease M (full prune of an element) or increase M (split one entry into two), so the v1 monotone-Φ argument no longer applies. v2 sidesteps this by **not requiring a monotone amortised bound for remove**: §7.6 specifies direct per-op bounds (`O(log m_e + k + E)` for `remove(e, start, end)`, `O(E)` for `remove(e)`, `O(1)` for `clear()`), which are `O(log m_e + k)` plus an eager-prune renumber term that is amortised over the element lifecycle (informative argument in §7.6). No redesigned `Φ` is needed; the spec's claim is a per-op direct bound, not an amortised-via-potential bound.
 
 ### 14.2 Persistent / Immutable variant
 
@@ -1743,15 +2670,32 @@ The following are **explicitly excluded** from v1:
 
 - A lazy-iterator version of `transitions(over:)` (Swift `AsyncSequence` / Ruby `Enumerator`).
 
-### 14.9 Set operations between two `Rangeable<Element>` (deferred from v1)
+### 14.9 Set operations between two `Rangeable<Element>` (historical pointer + sym-diff amendment)
 
-v1 explicitly excludes (§13) `union` / `intersect` / `difference` between two `Rangeable`s. v2+ design considerations:
+> **Implemented in v2.** See §6.10 (`union`), §6.11 (`intersect`), §6.12 (`difference`), §6.13 (`symmetric_difference`); §4.10 for the eager-pruning rule that ensures empty results are pruned cleanly across all four ops; §7.7 for complexity bounds (all four ops are `O(M_self + M_other)` via two-pointer sweep); §10.C–§10.G (#44–#80) for test contracts. The v1-noted open questions about `insertion_order` rules and empty-`R(e)` handling are now both resolved (per-op rules in §4.10's tables and §6.10–§6.13 pseudocode).
 
-- **`union(other:)`**: for all `e ∈ keys(self) ∪ keys(other)`, the new `R(e) := canonicalize(R_self(e) ∪ R_other(e))`. The merge rule for `insertion_order` MUST be specified (proposal: use self as the primary order; elements in `other` not present in self are appended at the tail in `other`'s `insertion_order`). Idempotent and associative. Complexity `O(M_self + M_other + E_self + E_other)`, via a single sweep over the merged event streams.
-- **`intersect(other:)`**: for all `e ∈ keys(self) ∩ keys(other)`, the new `R(e) := R_self(e) ∩ R_other(e)` (per-element interval intersection). Elements with empty `R(e)` are removed from `keys`. **Note: v1 has no remove, but intersect naturally produces empty `R(e)` cases**, so v2 either allows empty entries or omits them from the intersect result; this RFC defers the choice to the v2 spec.
-- **`difference(other:)`**: for all `e`, the new `R(e) := R_self(e) \ R_other(e)` (per-element interval set difference, which may split one entry into two). May likewise produce empty `R(e)`. Semantically isomorphic to v2's remove (remove is difference with a single-interval `Rangeable`).
+#### 14.9.1 Symmetric difference inclusion (v2 amendment, justification)
 
-**Why deferred:** (i) `intersect` / `difference` first require nailing down invariants for "handling keys with empty `R(e)`" and "event_index synchronisation"; (ii) `union` has multiple reasonable choices for the insertion_order merge rule, which must be spec'd to preserve §4.5 determinism; (iii) v1's markdown / scheduling workload does not directly need these ops (a caller can brute-force combine multiple `r[i].objs` results externally).
+v1's §14.9 sketched only `union` / `intersect` / `difference`. v2 additionally promotes **`symmetric_difference`** to normative. Justification (three points):
+
+1. **Closed Boolean closure.** `symmetric_difference` is the unique additional Boolean set operation closed over `Rangeable<E>` beyond the three v1-sketched ops. The four-element Boolean lattice on two sets is `{∅, A∖B, B∖A, A∩B}`, whose pairwise unions yield the closure: `union = (A∖B) ∪ (A∩B) ∪ (B∖A)`, `intersect = A∩B`, `difference = A∖B`, `symmetric_difference = (A∖B) ∪ (B∖A)`. Without `symmetric_difference`, the closure is incomplete; library callers cannot express "the parts that differ between two snapshots" in a single op.
+2. **Negligible implementation cost.** `symmetric_difference` is implementable in `O(M_self + M_other)` (per §7.7) via the same two-pointer sweep that powers `union` and `intersect`. The §6.13 pseudocode reuses `subtract_disjoint_lists` (from §6.12) and `merge_disjoint_lists` (from §6.10) directly; no new primitive algorithm is required.
+3. **Concrete caller demand.** Library callers that compare two `Rangeable` snapshots (e.g. ZMediumToMarkdown comparing annotated-vs-canonical markup overlays; AVPlayer cache comparing on-disk vs in-flight byte ranges) need the "edits between snapshots" semantics. `union`, `intersect`, `difference` cannot express this in a single call.
+
+**Algebraic identity used in the spec proof (also normative):** `A △ B := (A ∪ B) ∖ (A ∩ B) = (A ∖ B) ∪ (B ∖ A)`. Both forms compute identically under per-element `R(e)` algebra, allowing dual implementations for cross-validation (Test #77). The §6.13 pseudocode adopts the second form `(A ∖ B) ∪ (B ∖ A)` as the canonical reference, because it shares primitives with §6.12 and avoids the materialise-then-subtract round-trip of the first form.
+
+#### 14.9.2 Insertion-order rules for set ops (v2-resolved)
+
+The v1 §14.9 paragraph noted "the insertion_order merge rule MUST be specified … this RFC defers the choice to the v2 spec". v2 resolves this with the following normative table (also reproduced in §4.10's preamble cross-references and per-op pseudocode in §6.10–§6.13):
+
+| Op | Insertion-order rule | Justification |
+|---|---|---|
+| `union(other)` | self primary; `keys(other) ∖ keys(self)` tail-appended in other's `insertion_order` order | Self-primary is the natural caller intent ("extend my container with other's contents"); tail-append for new keys preserves the §4.5 first-insert-ordinal monotonicity within each contributor |
+| `intersect(other)` | preserve self's `insertion_order` over `keys(self) ∩ keys(other)`, drop pruned-empty; densely renumber `ord` 1..N | Self-primary symmetry with union; renumbering keeps `ord` contiguous so binary searches over `ord` stay correct |
+| `difference(other)` | preserve self's `insertion_order` over surviving keys; drop pruned-empty; densely renumber `ord` | Difference cannot introduce other's elements, so other's order is irrelevant |
+| `symmetric_difference(other)` | self primary on `keys(self) ∖ keys(other)` portion; tail-append `keys(other) ∖ keys(self)` portion in other's `insertion_order` order; for shared keys (where intervals can still cancel non-trivially), keep self's position; drop pruned-empty; densely renumber `ord` | Combines the union and difference rules; symmetric-up-to which side is `self` (Test #69 validates the documented self-primary asymmetry) |
+
+**Renumbering is normative:** any op that drops elements MUST renumber `ord` `1..N` over the survivors in surviving-position order. Otherwise the `ord(e) ∈ [1, count]` invariant (§4.5, §5.1 I2.a) breaks, and `event_index`'s ord-based comparisons (§5.2, §6.3 `build_event_index`) produce the wrong order. The `insertion_order` array is rewritten from scratch from the survivors; the old numerical `ord` values are not preserved.
 
 ### 14.10 Worst-case `O(\log m_e)` per-op insert (improvement to the sorted-array variant)
 
@@ -1816,7 +2760,10 @@ v1 explicitly excludes (§13) `union` / `intersect` / `difference` between two `
 
 | Round | Reviewer | Date | RFC Version | Verdict | Comments |
 |---|---|---|---|---|---|
-| (placeholder) | | | v1.0 (this draft) | | |
+| 1 | Algorithms Faculty (independent) | 2026-05-09 | v1.0 | REJECTED | 6 MUST-FIX, 6 SHOULD-FIX, 2 QUESTIONS |
+| 2 | Algorithms Faculty (independent) | 2026-05-09 | v1.0 | APPROVED | All 6 MUST-FIX addressed; v1.0 finalised |
+| 3 | Phase 2 教授 agent (Opus) | 2026-05-10 | v2.0 (this draft) | APPROVED with 1 MUST-FIX applied in-line | All 7 Phase-2 checks pass; Top 3 uncertainties resolved (I2.a–I2.d self-consistent; §6.13 worked-example arithmetic verified; Test #70 expected output computed and patched into §10.F). 1 MUST-FIX applied directly to Test #70 (RFC §10.F line 2288 area: associativity expected `R(A) = [(0, 4), (10, 10), (16, 20)]` plus full left/right derivations). 0 SHOULD-FIX blocking; minor wording polish noted in detailed report. Ready for Phase 3 6-language parallel implementation. |
+| 4 | Phase 6 教授 agent (Opus 4.7, 1M context) | 2026-05-10 | v2.0 (post-implementation, post-conformance) | APPROVED (with 4 in-line RFC patches; 0 MUST-FIX blocking) | All 4 Phase-6 checks pass; cross-language consistency verified (8 method pairs across 6 languages, naming honors per-language idioms, semantics aligned); algorithmic equivalence confirmed via Phase-5 4973-line `cross_language.json` byte-identical conformance (200 ops + 126 probes + 20 set_ops + chain_ops associativity all green); v1 backward-compat preserved (Swift 38, Ruby 28, Python 117, Kotlin 30+, Go existing, JS 117 baseline tests all green). 4 in-line RFC patches applied: Test #65 worked example rewritten to single-element form with explicit `removeRanges` counter-example; §6.12 informative note re-targeted to per-element `remove`-loop equivalence with caveat paragraph; §9 case 37 sentinel-conflict resolution rule formalised (left-wins, SHOULD-warn, MUST-NOT-throw); §4.7 (C6) added documenting JS/TS `Number.MAX_SAFE_INTEGER` quantisation and fixture-coordinate guidance. All 6 implementations' deviations classified as ALLOWED (RFC scope) or SHOULD-FIX (v2.1 polish); zero MUST-FIX. Ready for v2 merge. See detailed report for naming-difference table and per-language deviation classification. |
 
 ### Round 1 — REJECTED (2026-05-09)
 
@@ -1831,4 +2778,95 @@ v1 explicitly excludes (§13) `union` / `intersect` / `difference` between two `
 **Summary:** all six MUST-FIX items are substantively addressed: (1) §4.7 (C4) Optional<Int> with `None == +∞` is elevated to MUST and the total order plus `succ` are fully defined; (C5) Int.min rules and Tests #23 / #23.A are added; (2) §6.1 step 4 is rewritten as `iv.hi + 1 >= lo` and (P5) explicitly cites the §4.7 (C4) succ semantics, underflow-free; (3) §7.2 adopts the two-term potential `α·M + β·TailSum` and explicitly walks the head-insert worst case; Lemma 7.2.A* corrects the amortised result from `O(log m_e)` to "balanced workload `O(log m_e)`, adversarial `Θ(m_e)`", and provides (R-B) BBST plus §14.10 order-statistic tree / Bentley-Saxe logarithmic method as RFC-internal normative-equivalent alternatives — reframing the issue as the inherent physical property of a sorted array (prepend necessarily Ω(m_e) shift), not an implementation flaw; (4) the §6.1 cleaner containment fast-path pseudocode covers idempotence / reverse-containment / multi-touch / first-insert corner cases; (5) Lemma 4.5.X (ruling out same-element same-coord open+close) and 4.5.Y (correctness of the sweep across elements at the same coord) have rigorous proofs; (6) §5.2 (I3.d) cache-write-path version re-check together with §11 (T3.M) Mutex / (T3.C) CAS patterns eliminate the stale-write race under the (T2) single-writer model. The newly added citations to Mehlhorn-Sanders, Sedgewick-Wayne, and Tarjan 1983 have been verified to exist.
 
 NOTES: the sample code in the §12.1 Ruby and §12.2 Swift implementation hints still retains the `lo - 1` form without being updated in lockstep; §12 is informative while the §6.1 pseudocode is normative, and the author has used the footnote "simplified; see §6.1 cleaner variant" as guidance — acceptable, but reference implementations SHOULD use the underflow-safe form. The §5.2 event tuple `coord: Int` is an informative shorthand; the Optional<Int> in §4.7 (C4) and the §6.3 pseudocode is normative. v1.1 should harmonise the text.
+
+### Round 3 — APPROVED (2026-05-10)
+
+**Reviewer:** Phase 2 教授 agent (Opus 4.7, 1M context)
+**RFC Version:** v2.0
+**Judgment:** APPROVED (with 1 MUST-FIX applied in-line by reviewer to Test #70)
+**Scope:** Removal API §6.6–§6.9, Set Operations API §6.10–§6.13, Empty-entry semantics §4.10, (I1.4) / (I2.a–d) tightening in §5.1, complexity bounds §7.6 / §7.7, edge-case table §9 rows #24–#37, test contracts §10.B–§10.G #21–#80, historical pointers in §13 / §14.1 / §14.9 with the §14.9.1 sym-diff inclusion amendment.
+
+**Verdict per Phase-2-plan check (1–7):**
+
+1. **(I1) and (I3) preservation across all 8 method pseudocodes — APPROVED.** §6.6 step 6 splice produces residuals with intra-entry gap `(end-start+1) ≥ 1` integer positions and inter-entry gap inherited from input (I1.2). §6.10 `merge_disjoint_lists` adjacency-collapse via `append_or_merge` is correct. §6.11 Lemma 6.11.A holds for both `i_b > i_a` and `j_b > j_a` (symmetric WLOG). §6.12 cut produces gap = `L_b[j].hi - L_b[j].lo + 2 ≥ 2`. §6.13 calls `merge_disjoint_lists` after the two `subtract`s (necessary, see worked example #2). All 4 mutating set-op forms invalidate `event_index` via the implied copy-then-swap into a fresh container; explicit invalidation present in §6.6–§6.9 step 8/4/3/5.
+
+2. **Underflow / overflow safety dual to §6.1 (P5) — APPROVED.** §6.6 step 5: `start - 1` only when `iv.lo < start` (so `start > Int.min`); `end + 1` only when `end < iv.hi` (so `end < Int.max`). §6.12 `subtract_disjoint_lists`: `L_b[j].lo - 1` only when `L_b[j].lo > current_lo` (finite); `L_b[j].hi + 1` only when `L_b[j].hi < current_hi` (finite). Tests #30 (Int.min start) and #31 (Int.max end) verify the boundary cases. §4.7 (C4) Int.max close-coord handled via `Optional<Int>` `None` sentinel; §4.5.X Lemma rules out same-element open+close collision after split-residuals.
+
+3. **Idempotence (no version bump on no-op) for all 8 ops — APPROVED.** §6.6 steps 2 and 4 quick-exit; §6.7 step 1; §6.8 step 1; §6.9 step 3 (`any_change == false`). §6.10–§6.13 mutating forms have explicit normative "MUST NOT bump when result == self structurally". Tests #21, #28, #33, #37, #42, #47, #49 cover the no-bump contracts.
+
+4. **Insertion-order rule for 4 set ops aligned with §4.5 — APPROVED.** §6.10 union: walks `r_self.insertion_order` then tail-appends `keys(other) ∖ keys(self)` in `r_other.insertion_order` order. §6.11 intersect: walks `r_self.insertion_order`, eager-prunes empty, dense `ord` renumber. §6.12 difference: same as intersect. §6.13 sym-diff: step 1 walks `r_self.insertion_order` (covers shared keys with self's position); step 2 tail-appends other-only keys. All four match the §14.9.2 normative table. No implicit `Hash`/`Map` iteration order dependency anywhere.
+
+5. **Cross-language reproducibility — APPROVED.** All 60 v2 tests in §10.B–§10.G have concrete expected outputs (after the Test #70 fix). Zero "implementation defined" loopholes in the v2 normative sections (the only `MAY differ` is in Test #77 with explicit "MUST post-normalise" requirement). Pseudocode uses language-neutral primitives (bsearch, two-pointer sweep) with explicit step numbering. §10.G stress tests #72–#80 cover the subtle cases where Hash iteration could leak.
+
+6. **Eager-pruning × event_index invalidation — APPROVED.** §4.10 final paragraph explicitly normative: "Eager pruning is itself a mutation; per §5.2 (I3.c) it MUST invalidate event_index." All four removal pseudocodes have explicit `r.event_index := nil` (§6.6 step 8, §6.7 step 4, §6.8 step 3, §6.9 step 5). Set-op non-mutating forms produce fresh containers with `version = 0`, so cached `event_index.events[*].ord` cannot be stale (lazily rebuilt on first query with fresh `r.ord`).
+
+7. **Sym-diff two algebraic forms produce identical insertion_order — APPROVED.** Reviewer manually traced four cases (incl. r1=[A], r2=[C,B,D] and r1=[B], r2=[A,B]) verifying both `(A∖B) ∪ (B∖A)` (§6.13) and `(A∪B) ∖ (A∩B)` (Test #77 alt-form) produce identical `insertion_order` when each constituent op follows the §14.9.2 rule. Test #77's "MAY differ" caveat is overcautious — for canonical pseudocode they always agree; the caveat exists only as a guard against sloppy alt-form implementations using Hash iteration in their union/intersect step. No conflict with §6.13.
+
+**Verdict per Phase-1 Top-3 uncertainties:**
+
+- **Top 3 #1 ((I2.a)–(I2.d) self-consistency) — APPROVED.** All 8 pseudocodes maintain (I2.a)–(I2.d). No conflict with §4.5 first-insert ordering (post-prune re-insert is logically a first-insert, documented in §4.10 deliberate side effect). v1 §6.1–§6.5 implicit reasoning (no remove ⇒ insertion_order ⊇ keys(intervals)) is now strengthened to equality and consistent with all v1 normative claims (which all assumed `R(e) ≠ ∅` for `e ∈ keys`).
+
+- **Top 3 #2 (§6.13 worked example arithmetic) — APPROVED.** Reviewer manually re-derived both worked examples in §6.13: Example 1 (r1=[(0,5)], r2=[(2,8),(10,15)]) yields `a=[(0,1)]`, `b=[(6,8),(10,15)]`, merge=`[(0,1),(6,8),(10,15)]` — adjacency check `1+1=2 < 6` correct, sorted-concat happens to be no-op. Example 2 (r1=[(0,5)], r2=[(6,10)]) yields `a=[(0,5)]`, `b=[(6,10)]`, merge=`[(0,10)]` — adjacency `5+1=6 == lo of b` so `merge_disjoint_lists` is required (sorted-concat would violate (I1.2)). The two-example pedagogy (one no-op merge case + one truly-adjacent case) is appropriate; sharper single-example consolidation possible but not required.
+
+- **Top 3 #3 (Test #70 associativity) — MUST-FIX APPLIED.** Reviewer manually computed both left-association `(r1 △ r2) △ r3` and right-association `r1 △ (r2 △ r3)` for `r1=[A:(0,10)], r2=[A:(5,15)], r3=[A:(10,20)]`. Both produce `R(A) = [(0,4), (10,10), (16,20)]`. Edited Test #70 in §10.F to add full expected output, both worked derivations, and a justification paragraph proving sym-diff associativity holds in closed-interval-with-integer-adjacency semantics (XOR of characteristic functions is associative; canonicalization is a deterministic function of the integer set).
+
+**MUST-FIX summary (1 item, applied in-line by reviewer):**
+- Test #70 expected output completed; both associativity derivations added; associativity-justification paragraph added.
+
+**SHOULD-FIX (0 blocking; for future polish):**
+- §6.10–§6.13 mutating-form pseudocode is implicit ("copy-then-swap"); Phase 3 implementations should ensure the post-swap `event_index` is `nil` (which falls out naturally if the fresh non-mutating result is constructed via `Rangeable.empty()` and then assigned). Not a spec defect; just a Phase 3 implementation note.
+- §12.1 Ruby and §12.2 Swift sample code in informative §12 still uses `lo - 1` form (carried over from v1; already noted in Round 2 NOTES). Suggest harmonising to `iv.hi + 1 ≥ lo` form in a future v2.1 doc-only patch.
+
+**Ready for Phase 3.** Spec density is sufficient for 6 language teams to produce byte-identical results. The eager-pruning + dense `ord` renumber rule is the load-bearing cross-language conformance contract; §10.G stress tests #72–#80 provide explicit fixture probes for it.
+
+### Round 4 — APPROVED with 4 in-line RFC patches (2026-05-10)
+
+**Reviewer:** Phase 6 教授 agent (Opus 4.7, 1M context)
+**RFC Version:** v2.0 (post-Round-3, post-implementation, post-Phase-5 conformance)
+**Judgment:** APPROVED with 4 in-line RFC patches; 0 MUST-FIX blocking; ready for v2 merge.
+**Scope:** Cross-language consistency review of all 6 reference implementations (Swift, Ruby, Python, Kotlin, Go, JS/TS) for the v2 surface (Removal API §6.6–§6.9, Set Operations API §6.10–§6.13). Phase-5 4973-line `cross_language.json` byte-identical conformance result accepted as algorithmic equivalence proof; this round focuses on naming, idiom, deviation classification, RFC bug patches, and v1 backward-compat.
+
+**Verdict per Phase-6-plan check (1–4):**
+
+1. **Cross-language consistency — APPROVED.** All 8 v2 method pairs (4 removal + 4 set ops, each in mutating + non-mutating form for the latter) are present in every language. Naming honors per-language idioms and aligns with the language's own standard set library (Swift `SetAlgebra` lexicon, Ruby bang convention, Python `set` lexicon, Kotlin self-coined `*InPlace` suffix, Go PascalCase + `-ed` suffix, JS/TS Stage-4 `Set` proposal). The mutating-vs-non-mutating distinction is unambiguous in every language. Operator overloads conform to per-language conventions: Ruby `| & - ^`; Python `| & - ^` and `|= &= -= ^=`; Kotlin `+ - += -=` (note: Kotlin uses `+/-` instead of `|/-` because Kotlin operator-overloading whitelist permits `+/-` but not `|/&/^`; symmetric-difference therefore has no operator in Kotlin); Swift no operator overloads (intentional — `formUnion`/`union` vocabulary is the Swift convention). See "Naming Difference Table" in Phase-6 reviewer report.
+
+2. **Algorithmic equivalence — APPROVED (Phase 5 evidence accepted).** Phase-5 conformance run was 6/6 byte-identical against `cross_language.json` (200 mixed inserts/removes ops + 126 probes covering subscript/transitions/getRange + 20 set_op cases each with 5–10 probes + chain-op associativity probes). No discrepancies reported on insertion-order, ord renumber, eager-prune, version-bump, or boundary close-coord behavior. Manual sanity check on the three two-pointer helpers (`merge_disjoint_lists`, `intersect_disjoint_lists`, `subtract_disjoint_lists`) across all 6 languages confirms `O(M_a + M_b)` complexity (no `O(M·N)` regression); reviewer verified `i, j` advance once per loop iteration in every implementation, no nested scan over `b` per element of `a`.
+
+3. **v1 API surface backward-compat — APPROVED.** All 6 v1 baseline test suites are reported green post-v2: Swift 38/38, Ruby 28/28, Python 117/117, Kotlin 30+/30+, Go (existing test count) all passing, JS 117/117. v1 method signatures are unchanged: `insert / getRange / [i] / transitions / version / count / isEmpty / copy / iteration` are byte-compatible. v2 fixtures are a strict superset of v1 (record without `op` field defaults to `insert`); v1 `cross_language.json` continues to round-trip on every language (Phase-5 backward-compat smoke test).
+
+4. **Per-language deviation classification — APPROVED.** All 14 documented per-language implementation-note deviations are within RFC scope (ALLOWED) or are non-blocking polish items (SHOULD-FIX for v2.1). Zero MUST-FIX. Highlights:
+   * **ALLOWED (RFC scope):** Swift `storageEquivalent` post-construction comparison; Swift `adoptStorage` whole-storage replacement; Ruby `union(self, self)` going through `swap_with`; Ruby `structurally_equal?` O(M_out) overhead; Python `_populate` direct `_entries` write (bypasses public API but documented); Kotlin `MutationResult` sealed class; Kotlin `ord: var` (RFC permits dense renumber via in-place mutation); Go `pruneElement` slice-in-place mutate (idiomatic Go, semantically equivalent); JS `unionInPlace` extra `O(M)` dirty check (semantically equivalent, no observable behavior change).
+   * **SHOULD-FIX (v2.1 polish):** (a) Python `__delitem__` / `__getitem__` API ambiguity (`del r[e]` vs `r[i]` overload pun); should add docstring caveat. (b) Kotlin `structurallyEquals` does not compare `ord` numerically (relies on iteration-order match); harmless because dense-renumber is deterministic from iteration order, but for clarity should add an `ord` assert in debug builds. (c) JS `_intervalListsEqual` is called multiple times per key inside `unionInPlace`; could be cached. (d) Go `intMaxSentinel` was already left-wins before this RFC patch — keep behavior, but the new §9 case 37 sentinel-conflict-resolution rule retroactively makes it normative across all 6 languages (JS Phase-3 report noted "mutating ops don't propagate"; should align to left-wins). (e) Kotlin currently makes `intMaxSentinel` an opt-in constructor param; document whether it propagates through set ops (currently does, via `Rangeable<E>(intMaxSentinel = ...)` in `union`/`intersect`/`difference`/`symmetricDifference`).
+   * **MUST-FIX:** none. All 6 implementations conform to the v2 normative spec on every observable behavior covered by the test contract and the cross-language fixture.
+
+**RFC patches applied in-line by reviewer (4 items):**
+
+1. **§10.E Test #65 worked example rewritten.** Original example multi-element example (`r1.Strong=[(0,10)], r1.Italic=[(5,15)]`; `r2.Strong=[(3,6)], r2.Italic=[(12,18)]`) fails the stated `difference ≡ removeRanges-loop` equivalence: per-element `difference` produces `Italic=[(5,11)]`, but `removeRanges(3,6); removeRanges(12,18)` cross-pollutes (the second `removeRanges` cuts `[12,15]` out of Italic regardless of which key in `r2` the range came from). All 6 language teams independently flagged this. Test #65 is now a single-element worked example (`r1.Strong=[(0,10)], r2.Strong=[(3,6)]`) where the equivalence holds trivially; the multi-element scenario is preserved as an explicit counter-example showing why the original claim was wrong.
+
+2. **§6.12 informative equivalence note re-targeted.** The note now correctly states `r.difference(other)` is structurally equivalent to the per-element `for e in keys(other): for ((lo, hi) in other.getRange(of: e)) r.remove(e, lo, hi)` reduction (per-key surgical erase via §6.6 `remove`, NOT cross-element erase via §6.9 `removeRanges`). A caveat paragraph explains the cross-element-vs-per-key distinction with the same counter-example.
+
+3. **§9 case 37 sentinel-conflict resolution rule.** Added normative resolution: result inherits `self.intMaxSentinel` (left-wins, since set ops are not algebraically commutative on configuration metadata; `lhs ∪ rhs` and `rhs ∪ lhs` may differ on insertion-order anyway). When `self.intMaxSentinel != other.intMaxSentinel` and both are set, implementations SHOULD warn but MUST NOT throw. When `other.intMaxSentinel` is set but `self.intMaxSentinel` is unset, the result inherits `nil` / unset (no auto-promotion). Go has implemented this since Phase 3; the rule is now retroactively normative for the other 5 languages.
+
+4. **§4.7 (C6) JS/TS i64-precision informative note.** Added: JS `Number.MAX_SAFE_INTEGER` is `2^53 - 1`; coordinates beyond ±2^53 MAY be silently quantised (Phase-4 fixture used the i64-ish value `4611686018427387903`, which `JSON.parse` quantised to `4611686018427388000` in JS — no observable effect on the fixture probes because the value was outside every probe range, but flagged for future fixture authors). Cross-language fixtures SHOULD constrain test coordinates to ±2^53. Boundary tests (#23, #23.A, #30, #31) remain normative and use language-specific sentinels.
+
+**Naming Difference Table (per-language, 8 v2 methods, abbreviated):**
+
+| Method | Swift | Ruby | Python | Kotlin | Go | JS/TS |
+|---|---|---|---|---|---|---|
+| remove `(e, start, end)` | `remove(_:start:end:)` | `remove(e, start:, end:)` | `remove(e, *, start, end)` | `remove(e, start, end)` | `Remove(e, start, end)` | `remove(e, {start, end})` |
+| remove element | `remove(_:)` | `remove_element` (alias `delete`) | `remove_element`, `__delitem__` | `remove(e)` | `RemoveElement` | `removeElement` |
+| clear | `removeAll` | `clear` (alias `remove_all`) | `clear` | `clear` | `Clear` | `clear` |
+| removeRanges | `removeRanges(start:end:)` | `remove_ranges(start:, end:)` | `remove_ranges(*, start, end)` | `removeRanges` | `RemoveRanges` | `removeRanges({start, end})` |
+| union (mut) | `formUnion` | `union!` | `update`, `\|=` | `unionInPlace`, `+=` | `Union` | `unionInPlace` |
+| union (non-mut) | `union` | `union`, `\|` | `union`, `\|` | `union`, `+` | `Unioned` | `union` |
+| intersect (mut) | `formIntersection` | `intersect!` (alias `intersection!`) | `intersection_update`, `&=` | `intersectInPlace` | `Intersect` | `intersectInPlace` |
+| intersect (non-mut) | `intersection` | `intersect` (alias `intersection`), `&` | `intersection`, `&` | `intersect` | `Intersected` | `intersection` |
+| difference (mut) | `subtract` | `difference!` (alias `subtract!`) | `difference_update`, `-=` | `differenceInPlace`, `-=` | `Subtract` | `subtractInPlace` |
+| difference (non-mut) | `subtracting` | `difference` (alias `subtract`), `-` | `difference`, `-` | `difference`, `-` | `Subtracted` | `difference` |
+| sym-diff (mut) | `formSymmetricDifference` | `symmetric_difference!` | `symmetric_difference_update`, `^=` | `symmetricDifferenceInPlace` | `SymmetricDifference` | `symmetricDifferenceInPlace` |
+| sym-diff (non-mut) | `symmetricDifference` | `symmetric_difference`, `^` | `symmetric_difference`, `^` | `symmetricDifference` | `SymmetricallyDifferenced` | `symmetricDifference` |
+
+All names align with the language's own standard set library convention. Semantically all 12 method pairs implement RFC §6.6–§6.13 byte-identically (Phase-5 confirmed).
+
+**Final verdict.** APPROVED for v2 merge. 4 in-line RFC patches applied (Issues A/B/C from Phase-6 reviewer report). 0 MUST-FIX blocking. SHOULD-FIX items (5) deferred to v2.1 doc-only / polish patch. The Rangeable v2 specification, the 6 reference implementations, the cross-language fixture, and the conformance harness collectively meet the "algorithmic equivalence under per-language idiom" cross-language conformance bar set in §10.G.
 
