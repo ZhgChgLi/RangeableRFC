@@ -45,6 +45,10 @@ Calendars map cleanly onto `Rangeable<Element>`:
 
 A naive nested loop is `O(N²)`; `Rangeable`'s sweep-line implementation is `O(N)` per pairwise op (RFC §7.7).
 
+### Without Rangeable
+
+A naive approach sorts both calendars and runs an `O(N²)` pairwise comparison per attendee pair. Free time requires a separate pass that sorts the busy intervals, merges adjacent ones, then walks the day boundary subtracting each busy interval — easy to get the boundary handling wrong (off-by-one between exclusive `end` and adjacent intervals; zero-length slots; midnight wrap-around). Mutual availability across N attendees needs N sorted lists merged into one, then the same subtraction pass. Total: roughly 80–120 lines of boundary-careful code vs the 6 lines below; complexity is the same `O(N log N)` once you sort, but the bug surface is much larger and you re-implement the same merge logic in three places (free time, conflict, mutual).
+
 ### Ruby
 
 ```ruby
@@ -106,6 +110,10 @@ Each gene / feature is an **element**; its base-pair extent is a **range**. The 
 - **`symmetric_difference(ensembl, refseq)`** → per-feature edge disagreement, with empty-result features eagerly pruned (RFC §4.10), so you only see the genes that actually disagree.
 
 The per-feature framing matters: a flat "all intervals" diff would conflate disagreements across genes; the element-keyed split keeps them separate.
+
+### Without Rangeable
+
+Bioinformatics teams typically reach for `bedtools intersect` / `bedtools subtract` (shell-out + file IO + tab-separated BED parsing) or build an interval tree per source. Diffing two sources per-gene then needs an explicit "for each gene, find it in both, split intervals at the disagreement boundary, drop empty results" loop — about 150 lines of careful interval splitting versus the 6 lines below. The intersect / symmetric_difference framing also forces you to write the empty-result pruning by hand (e.g., suppress TP53 when it agrees exactly); here it's automatic (RFC §4.10), so the diff output already shows only the genes that actually disagree.
 
 ### Ruby
 
@@ -177,6 +185,10 @@ A common implementation is `Hash<EffectId, [start_frame, end_frame]>` plus per-f
 
 Re-applying the same effect (`insert(:haste, …)` twice) automatically unions and the active-set query never sees duplicates.
 
+### Without Rangeable
+
+The standard implementation is `Hash<EffectId, [start_frame, end_frame]>` plus per-frame iteration. Re-applying the same effect (haste cast twice with overlapping durations) requires manual merge logic; partial dispel ("cancel the back half of haste") becomes "compute the new range and overwrite the hash entry", which is brittle when the same effect was previously applied multiple times and merged into a single span — you have to remember whether the original was one span or many. Active-set query is `O(N_effects)` per frame instead of `O(log M + r)`. Easily 60–100 lines of error-prone bookkeeping for what becomes 8 lines of Rangeable below, and dispel-then-reapply produces wrong active sets if the merge logic missed a corner case.
+
 ### Ruby
 
 ```ruby
@@ -237,6 +249,10 @@ A typical implementation uses a `WHERE start_date <= ? AND end_date >= ?` SQL fi
 - **`union(federal, state)`** → composite rulebook in one call.
 - **`subscript[date_jd].objs`** → applicable clauses on that date, in the same first-insert order across runs.
 - **`remove(clause, start: sunset_jd, end:)`** → sunset a clause's future without forgetting its past coverage.
+
+### Without Rangeable
+
+A typical implementation uses a SQL `WHERE start_date <= ? AND end_date >= ?` filter, which works for a single jurisdiction but doesn't compose across federal + state + city in one shot — you either `UNION ALL` into one query (and lose the per-clause structure needed for "which clauses applied") or run N queries and merge in application code. Sunset becomes either an `UPDATE end_date = …` (which loses the pre-sunset history needed for audit) or an `INSERT` of a "superseded" marker (which makes every applicable-clauses query parse a state machine). Rangeable keeps the per-clause structure intact, composes across sources with one `union` call, and `remove(clause, sunset_date, end_of_time)` keeps the pre-sunset effective period intact for audit — `get_range(clause)` after the remove returns exactly the clause's pre-sunset coverage.
 
 ### Ruby
 
@@ -302,6 +318,10 @@ Convert each CIDR block to its `[low_ip, high_ip]` integer range using `IPAddr#t
 - **Range** = `[low_ip_int, high_ip_int]`.
 - **Collision detection**: walk `transitions` over the whole pool — whenever an `:open` event raises the active-set size above 1, two tenants share that coordinate.
 - **Free pool**: `total_pool.difference(union_of_all_tenant_blocks)`; `Rangeable.difference` handles the per-tenant subtraction in `O(M_total + M_occupied)`.
+
+### Without Rangeable
+
+Two common approaches both fail at scale: (a) `O(N²)` pairwise CIDR overlap check using `IPAddr#include?` for every tenant pair — fine for 5 tenants, painful for 500, and the collision message ("alice overlaps with bob from X to Y") still requires a manual interval intersection on the side; (b) materialise each block as `IPAddr#to_range.to_a` and use `Set` operations — for a `/16` pool that's 65 536 entries per tenant, blowing up memory and turning every set op into a 65k-element scan. Building a hand-rolled interval tree (~200 lines) is the third option. Rangeable handles all three operations (collision, free pool, footprint) in `O(M)` per element with no auxiliary data structure; for a /16 with 100 tenant blocks the entire computation is ~200 interval comparisons.
 
 ### Ruby
 
@@ -395,6 +415,10 @@ This is the *generalised cousin* of the markdown markup render in [RFC §1.3](RF
 
 The first-insert ordering (RFC §4.5) means severities consistently sort the same way across runs, so a "highest-severity wins" tie-break is deterministic.
 
+### Without Rangeable
+
+Combining N lint passes by hand requires gathering all `(start, end, severity)` tuples, sorting by `start`, sweeping with an active-stack that handles overlap precedence (highest severity wins), and emitting render events on every state change — typically 100–150 lines including the precedence resolution and the boundary-toggle render loop. Same `O(N log N)` complexity as Rangeable but ~30× more code, and the boundary cases (zero-length range, exact overlap of two passes, identical severity at the same coord, end-of-line cleanup) are easy to mis-implement. Adding a fourth lint pass (e.g., security linter) means adding another data path through the merge; with Rangeable it's one more `.union(security_pass)` chain.
+
 ### Ruby
 
 ```ruby
@@ -486,6 +510,10 @@ This is exactly the workload `Rangeable` was distilled from (RFC §1.3). The map
 - **`insert(:strong, …)` twice** — same-type overlapping (or integer-adjacent) ranges automatically union (RFC §4.3 adjacency rule).
 - **`transitions(over: paragraph_range)`** → boundary event stream that drives the render loop. RFC §4.5 guarantees opens precede closes at the same coordinate, and closes are emitted in LIFO order by `ord` — exactly the markdown nesting rule.
 
+### Without Rangeable
+
+This is exactly what ZMediumToMarkdown looked like before v3.6.0: a per-character walk over a sorted tag list, scanning all m markups at every character index for an `O(L · m)` inner loop. For a typical Medium article (L ≈ 2000 characters, m ≈ 50 markups per paragraph) that's 100 000 inner-loop iterations per paragraph; for articles with synthesised ESCAPE markups m can reach the hundreds. Same-type overlap merging was a separate manual pre-pass before the walker even ran (sort markups by `start`, scan for overlapping same-type pairs, union them, repeat to fixed point) — easy to miss the integer-adjacency case where `[2, 5]` and `[6, 7]` should still fuse. The Rangeable rewrite replaced both the inner loop and the manual merge with `insert(:strong, …)` (auto-union per RFC §4.3) plus `transitions(over: 0..L-1)` (one binary-search + linear walk), yielding the **2.23× end-to-end speedup** quoted in [RFC §1.3](RFC.md) — production-measured against the existing 306-test fixture.
+
 ### Ruby
 
 ```ruby
@@ -551,6 +579,10 @@ A single `Rangeable<CacheToken>` per asset (with `CacheToken` a singleton like `
 - **Q2** = `cache.insert(:cached, start: offset, end: offset + data.bytesize - 1)`. RFC §4.3's integer-adjacency rule means `[0, 100]` and `[101, 199]` automatically union without any manual merge logic.
 - **Q1** = `cache[lo].objs.include?(:cached)` (point-stab for the first byte) plus a single `transitions(over: lo..hi)` to locate the next boundary — splitting the request into "from-disk" and "from-network" sub-spans is then a constant-state walk over the events.
 - **LRU eviction** (v2): `cache.remove(:cached, start:, end:)` excises a range and may split an existing entry — exactly what an eviction policy needs. Pre-v2 this required rebuilding the `Rangeable` from `get_range(:cached)` minus the evicted run; v2 makes it one call.
+
+### Without Rangeable
+
+The reference Medium article that motivates [RFC §1.3.1](RFC.md) explicitly punts on non-contiguous merge: it merges only strictly contiguous responses into a single in-memory `Data` blob, drops anything else on the floor, and warns that supporting non-contiguous merge "would require a different storage scheme that can identify gaps, plus a query path that splits the request into 'served-from-disk' and 'fetch-from-network' sub-spans — which is very complex." It also flags the OOM risk of holding the whole asset as one `Data` (problematic for video-sized assets). Rolling your own interval tree to hold the index gives you ~200 lines of tree code plus another ~80 lines for the request-split walk — and you still have to hand-write the integer-adjacency union case (`[0, 100]` next to `[101, 199]`) that one of the fix-up commits in any such tree typically forgets. The Rangeable implementation below is ~10 lines for Q2 (write), ~20 lines for Q1 (read split via `transitions`), and zero lines for the merge logic (it's `insert` plus the §4.3 adjacency rule). LRU eviction goes from "rebuild the cache index from surviving runs" (`O(N)` full reconstruction) to one `remove(e, start, end)` call (`O(log N + k)` per RFC §7.6).
 
 ### Ruby
 
